@@ -1,0 +1,22 @@
+[package]
+name = "riposte-detect"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+riposte-core = { workspace = true }
+riposte-store = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+# Pulls fastembed + ort (ONNX Runtime). Heavy, downloads model weights on
+# first use, and not required for the gate to run. See docs/DECISIONS.md D6.
+onnx = ["dep:fastembed"]
+
+[dependencies.fastembed]
+version = "4"
+optional = true

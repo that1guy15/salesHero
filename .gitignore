@@ -1,0 +1,53 @@
+# ─── Rust ────────────────────────────────────────────────────────────────
+/target
+**/*.rs.bk
+*.pdb
+
+# ─── Node / Tauri (from M6) ──────────────────────────────────────────────
+node_modules/
+dist/
+.svelte-kit/
+
+# ─── LEGAL: real call audio must never be committed ──────────────────────
+# Recording law is not a formality. Two-party-consent states treat an
+# unconsented recording as a crime. Synthetic TTS fixtures only.
+# See docs/06-COMPLIANCE.md.
+evals/fixtures/real/
+**/*.wav
+**/*.mp3
+**/*.m4a
+**/*.flac
+**/*.ogg
+!evals/fixtures/synthetic/**/*.wav
+
+# ─── Model weights — too large and separately licensed ───────────────────
+models/
+**/*.onnx
+**/*.gguf
+**/*.safetensors
+.fastembed_cache/
+
+# ─── Secrets ─────────────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+
+# ─── Local user data ─────────────────────────────────────────────────────
+*.db
+*.db-wal
+*.db-shm
+*.playbook
+/scratch/
+
+# ─── OS / editor ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# ─── Claude Code local overrides (shared config IS committed) ────────────
+.claude/settings.local.json

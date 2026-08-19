@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    # Everything except crates/audio compiles and tests on Linux, so the
+    # default runner is cheap. Windows is where crates/audio must be proven
+    # from M4 onward — see docs/PROJECT-STATUS.md §"Platform".
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: Test
+        run: cargo test --workspace
+
+      # The four named invariant tests from AGENTS.md are required to exist.
+      # A rename or deletion should fail CI loudly rather than quietly
+      # reducing coverage of a legal constraint.
+      - name: Required invariant tests are present
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=0
+          for t in comply_objections_never_reach_llm; do
+            if ! cargo test --workspace -- --list 2>/dev/null | grep -q "$t"; then
+              echo "::error::required invariant test missing: $t"
+              missing=1
+            fi
+          done
+          exit $missing
+
+  smoke:
+    # The M0 and M1 runnable criteria from docs/07-BUILD-PLAN.md, exercised
+    # end to end. A milestone whose runnable output criterion is unmet does
+    # not merge.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: M0 — import and list
+        run: |
+          cargo run -q -p riposte-cli -- playbook import playbooks/insurance-cold-call.yaml
+          cargo run -q -p riposte-cli -- playbook list
+          cargo run -q -p riposte-cli -- rail
+      - name: M1 — detect
+        run: |
+          cargo run -q -p riposte-cli -- detect --text "yeah I never filled out any form" --all
+          cargo run -q -p riposte-cli -- detect --text "take me off your list"

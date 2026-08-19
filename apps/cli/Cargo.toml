@@ -1,0 +1,22 @@
+[package]
+name = "riposte-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "riposte"
+path = "src/main.rs"
+
+[dependencies]
+riposte-core = { workspace = true }
+riposte-store = { workspace = true }
+riposte-playbook = { workspace = true }
+riposte-detect = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+
+[features]
+default = []
+onnx = ["riposte-detect/onnx"]

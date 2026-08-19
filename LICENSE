@@ -1,0 +1,36 @@
+MIT License
+
+Copyright (c) 2026 Ryan Booth
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+NOTE ON USE
+
+This software processes live telephone call audio and is intended for use in
+outbound sales calling. Recording and transcription of phone calls is
+regulated, and in roughly a dozen US states recording without all parties'
+consent is a crime rather than a policy violation. Telephone solicitation is
+additionally regulated under the TCPA and, for insurance, under state
+insurance law.
+
+This software is not a compliance system. See docs/06-COMPLIANCE.md before
+deploying it on live calls, and have your own counsel review your recording
+disclosure and do-not-call process.

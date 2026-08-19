@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/store",
+    "crates/playbook",
+    "crates/detect",
+    "apps/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT"
+repository = "https://github.com/that1guy15/salesHero"
+
+[workspace.dependencies]
+riposte-core = { path = "crates/core" }
+riposte-store = { path = "crates/store" }
+riposte-playbook = { path = "crates/playbook" }
+riposte-detect = { path = "crates/detect" }
+
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

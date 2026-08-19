@@ -1,0 +1,285 @@
+schema_version: 1
+name: "Insurance Cold Call — Default"
+locale: en-US
+
+# Ships preloaded so the app is useful on first run with zero setup.
+# Written for bought internet leads and aged leads, where the dominant
+# screen-outs differ from generic B2B cold calling.
+#
+# Agents should edit these into their own words. Responses that sound
+# like someone else's script are worse than no card at all.
+
+objections:
+
+  # ─────────────────────────────────────────────────────────── RAIL 1
+  - id: obj_no_form
+    label: "Never filled out a form"
+    category: screening
+    kind: rebut
+    rail_slot: 1
+    threshold: 0.62
+    triggers:
+      - "I never filled out any form"
+      - "I didn't request a quote"
+      - "I don't know what you're talking about"
+      - "I never signed up for anything"
+      - "I didn't fill anything out online"
+      - "you must have the wrong person"
+    negative_triggers:
+      - "I filled that out yesterday"
+      - "yes I did request a quote"
+    response: |
+      Don't argue about the form. Concede immediately, give a concrete
+      reason they might not remember, then ask one question.
+    talk_track:
+      - "Totally possible — these come to us through comparison sites, so it may not have been our name on the page."
+      - "Were you looking at rates online sometime in the last few months?"
+      - "If it wasn't you, I'll take you right off — no problem either way."
+    guardrails:
+      - "Never insist they did fill out a form."
+      - "If they deny it a second time, treat it as a removal request."
+    doc_refs: [doc_lead_sources]
+    enabled: true
+
+  # ─────────────────────────────────────────────────────────── RAIL 2
+  - id: obj_not_interested
+    label: "Not interested"
+    category: screening
+    kind: rebut
+    rail_slot: 2
+    threshold: 0.64
+    triggers:
+      - "not interested"
+      - "I'm all set"
+      - "no thanks"
+      - "we're good"
+      - "I'm not looking for anything"
+    negative_triggers:
+      - "I'm interested but not right now"
+    response: |
+      This is reflex, not a decision — it usually arrives before they know
+      what you're offering. Don't sell. Ask one disarming question and let
+      them re-engage on their own terms.
+    talk_track:
+      - "Fair enough — most people say that before I've said anything."
+      - "Can I ask one thing and then let you go? When did you last have your rate checked?"
+      - "If the number came back lower, would that be worth two minutes?"
+    guardrails:
+      - "One attempt only. A second 'not interested' ends the call."
+      - "Never say 'just hear me out'."
+    enabled: true
+
+  # ─────────────────────────────────────────────────────────── RAIL 3
+  - id: obj_already_covered
+    label: "Already have coverage"
+    category: coverage
+    kind: rebut
+    rail_slot: 3
+    threshold: 0.62
+    triggers:
+      - "I already have insurance"
+      - "I have an agent"
+      - "I'm with State Farm"
+      - "we're already covered"
+      - "I just renewed"
+      - "I've been with them for years"
+    response: |
+      Good news, not an obstacle — they're a buyer. Don't attack the
+      incumbent. Find the renewal date and the last time anyone actually
+      compared for them.
+    talk_track:
+      - "Good — that's who I'd rather talk to. When does it renew?"
+      - "When's the last time anyone actually shopped it for you?"
+      - "I'm not asking you to switch today. I'm asking to be the second quote."
+    guardrails:
+      - "Never criticize their current carrier or agent by name."
+      - "Do not promise savings before quoting."
+    doc_refs: [doc_carrier_comparison]
+    enabled: true
+
+  # ─────────────────────────────────────────────────────────── RAIL 4
+  - id: obj_bad_time
+    label: "Not a good time"
+    category: timing
+    kind: rebut
+    rail_slot: 4
+    threshold: 0.64
+    triggers:
+      - "now's not a good time"
+      - "I'm busy"
+      - "I'm at work"
+      - "I'm driving"
+      - "can you call me back later"
+      - "I'm in the middle of something"
+    response: |
+      Believe them. This is a callback capture, not a persuasion moment.
+      Get a specific time — vague ones never happen.
+    talk_track:
+      - "No problem — I'm not going to keep you."
+      - "Better later today or tomorrow morning?"
+      - "I'll put you down for 2pm. If something comes up, just text this number."
+    guardrails:
+      - "Do not continue pitching. Get the time and hang up."
+      - "Never accept 'sometime next week' — pin a day and a time."
+    enabled: true
+
+  # ─────────────────────────────────────────────────────────── RAIL 5
+  - id: obj_who_is_this
+    label: "Who is this?"
+    category: trust
+    kind: rebut
+    rail_slot: 5
+    threshold: 0.60
+    triggers:
+      - "who is this"
+      - "where did you get my number"
+      - "how did you get my information"
+      - "is this a scam"
+      - "who are you with"
+    response: |
+      Answer directly and completely. Any hedging here confirms their
+      suspicion. Name yourself, name the agency, name the source.
+    talk_track:
+      - "My name is ___, I'm with ___ here in ___."
+      - "Your info came from an online rate comparison form — I can tell you which one."
+      - "If you'd rather I didn't call again, say the word and you're off the list."
+    guardrails:
+      - "Never dodge the question about the lead source."
+      - "Never claim a prior relationship that doesn't exist."
+    doc_refs: [doc_lead_sources]
+    enabled: true
+
+  # ─────────────────────────────────────────────────────────── RAIL 6
+  - id: obj_dnc
+    label: "Take me off your list"
+    category: compliance
+    kind: comply            # forces allow_refine=false — see docs/06-COMPLIANCE.md
+    rail_slot: 6
+    threshold: 0.55         # deliberately low; a false positive here costs nothing
+    triggers:
+      - "take me off your list"
+      - "put me on your do not call list"
+      - "stop calling me"
+      - "don't call here again"
+      - "remove me from your list"
+      - "I'm on the do not call registry"
+      - "quit calling"
+    response: |
+      STOP. Do not rebut. Do not offer anything else. Do not ask why.
+      Confirm the removal, apologize briefly, end the call.
+    talk_track:
+      - "Absolutely — I'm removing you right now. You won't hear from us again."
+      - "Sorry to have bothered you. Have a good day."
+    guardrails:
+      - "No rebuttal. No alternative offer. No 'before you go'."
+      - "Log the removal and enter it in the dialer immediately."
+    enabled: true
+
+  # ──────────────────────────────────────────────── BELOW THE FOLD
+  - id: obj_price_first
+    label: "How much is it?"
+    category: price
+    kind: rebut
+    rail_slot: null
+    threshold: 0.62
+    triggers:
+      - "how much is it"
+      - "what's it going to cost"
+      - "just give me a number"
+      - "what are your rates"
+    response: |
+      They're engaged — this is a good sign. But a number without their
+      details is a guess you'll have to walk back later. Trade information
+      for information.
+    talk_track:
+      - "I can get you an exact number in about three minutes."
+      - "It comes down to a few things — can I ask you four quick questions?"
+      - "I'd rather give you the real number than a made-up one."
+    guardrails:
+      - "Never quote a rate before collecting rating information."
+    enabled: true
+
+  - id: obj_send_info
+    label: "Just email me something"
+    category: screening
+    kind: rebut
+    rail_slot: null
+    threshold: 0.64
+    triggers:
+      - "just send me something"
+      - "can you email me the information"
+      - "send me a brochure"
+      - "email me and I'll look at it"
+    response: |
+      Usually a polite exit. Agree to send something, but attach a
+      commitment to it — otherwise the email is the end of the call.
+    talk_track:
+      - "Happy to. What's the best address?"
+      - "So I send something useful and not generic — one question first."
+      - "I'll follow up Thursday. If you've decided against it, just tell me then."
+    guardrails:
+      - "Always get the callback commitment before agreeing to send."
+    enabled: true
+
+  - id: obj_spouse
+    label: "Need to ask my spouse"
+    category: timing
+    kind: rebut
+    rail_slot: null
+    threshold: 0.66
+    triggers:
+      - "I need to talk to my wife"
+      - "I have to ask my husband"
+      - "we make these decisions together"
+      - "let me check with my partner"
+    response: |
+      Legitimate and common. Don't try to close around them — get both
+      on the next call instead.
+    talk_track:
+      - "Of course. When are you both usually free?"
+      - "I'd rather do this once with both of you than twice."
+      - "What do you think they'll ask about? Let me get you that answer now."
+    guardrails:
+      - "Never suggest they decide without their spouse."
+    enabled: true
+
+  - id: obj_too_expensive
+    label: "That's too expensive"
+    category: price
+    kind: rebut
+    rail_slot: null
+    threshold: 0.62
+    triggers:
+      - "that's too expensive"
+      - "that's more than I pay now"
+      - "I can't afford that"
+      - "that's higher than my current rate"
+    response: |
+      Find out what they're comparing against before adjusting anything.
+      The comparison is usually not apples to apples.
+    talk_track:
+      - "What are you paying now — and what are your limits?"
+      - "Let me check whether we're comparing the same coverage."
+      - "There are a couple of levers here. Deductible is the big one."
+    guardrails:
+      - "Never reduce coverage to win on price without saying so explicitly."
+      - "Do not discount on the first exchange."
+    doc_refs: [doc_carrier_comparison]
+    enabled: true
+
+documents:
+  - id: doc_lead_sources
+    title: "Where our leads come from"
+    filename: lead-sources.md
+    sha256: ""     # computed at export
+
+  - id: doc_carrier_comparison
+    title: "Carrier coverage comparison"
+    filename: carrier-comparison.md
+    sha256: ""
+
+settings:
+  gate_threshold_default: 0.62
+  dedupe_window_ms: 45000
+  card_lifetime_ms: 90000
+  preroll_ms: 10000
