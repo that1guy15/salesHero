@@ -1,0 +1,59 @@
+/* Palette and type from docs/05-UX-SPEC.md §2.
+ *
+ * The reference is instrumentation — a glass cockpit, a mixing desk — not a
+ * SaaS dashboard. Colour encodes state and nothing else. */
+:root {
+  --surface: #12151a;
+  --surface-raised: #1b2028;
+  --edge: #2a313c;
+  --text: #e8edf4;
+  --text-dim: #8a94a3;
+  --rebut: #4da3ff;
+  --comply: #ff6b4d;
+  --disqualify: #b98cff;
+  --live: #3ed598;
+
+  --font: Inter, "Segoe UI", system-ui, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font);
+  /* Read at arm's length, off-axis, by people who are not all twenty-five.
+   * docs/05-UX-SPEC.md §2: body text does not go below 15px. */
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  cursor: default;
+}
+
+#app { height: 100%; }
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Movement means something. The only things that animate are things the agent
+ * needs to notice — and never for anyone who asked for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+:focus-visible {
+  outline: 2px solid var(--rebut);
+  outline-offset: 2px;
+}
