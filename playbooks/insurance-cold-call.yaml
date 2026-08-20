@@ -38,6 +38,9 @@ objections:
     guardrails:
       - "Never insist they did fill out a form."
       - "If they deny it a second time, treat it as a removal request."
+    # The guardrail above is now enforced, not merely asked for: a second fire
+    # inside one call serves the compliance card. See docs/DECISIONS.md D8.
+    escalate_after_repeats: 2
     doc_refs: [doc_lead_sources]
     enabled: true
 
@@ -67,6 +70,8 @@ objections:
     guardrails:
       - "One attempt only. A second 'not interested' ends the call."
       - "Never say 'just hear me out'."
+    # Enforced, not asked for. See docs/DECISIONS.md D8.
+    escalate_after_repeats: 2
     enabled: true
 
   # ─────────────────────────────────────────────────────────── RAIL 3

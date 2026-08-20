@@ -37,7 +37,11 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
     if a.len() != b.len() {
         return 0.0;
     }
-    a.iter().zip(b).map(|(x, y)| x * y).sum::<f32>().clamp(-1.0, 1.0)
+    a.iter()
+        .zip(b)
+        .map(|(x, y)| x * y)
+        .sum::<f32>()
+        .clamp(-1.0, 1.0)
 }
 
 fn l2_normalise(v: &mut [f32]) {
@@ -63,30 +67,41 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     h
 }
 
+/// Lowercase, strip punctuation, collapse whitespace. Contractions are split
+/// so "don't" and "do not" share the token "not" — the far-end stream is
+/// conversational and ASR output is inconsistent about them.
+///
+/// Shared with the gate's lexical comply scan (`gate::comply_containment`), so
+/// that a trigger phrase tokenises identically however it is being matched.
+pub fn normalize_tokens(text: &str) -> Vec<String> {
+    let lowered = text.to_lowercase();
+    let expanded = lowered
+        // Irregular forms first: a blanket "n't" -> " not" turns "can't" into
+        // "ca not" and "won't" into "wo not", losing the verb stem entirely.
+        // "can" and "will" carry real signal here — "I can't afford that" and
+        // "I won't be switching" are different objections.
+        .replace("can't", "can not")
+        .replace("cannot", "can not")
+        .replace("won't", "will not")
+        .replace("shan't", "shall not")
+        .replace("n't", " not")
+        .replace("'re", " are")
+        .replace("'m", " am")
+        .replace("'ve", " have")
+        .replace("'ll", " will");
+    expanded
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct HashEmbedder;
 
 impl HashEmbedder {
     pub fn new() -> Self {
         HashEmbedder
-    }
-
-    /// Lowercase, strip punctuation, collapse whitespace. Contractions are
-    /// split so "don't" and "do not" share the token "not" — the far-end
-    /// stream is conversational and ASR output is inconsistent about them.
-    fn tokenize(text: &str) -> Vec<String> {
-        let lowered = text.to_lowercase();
-        let expanded = lowered
-            .replace("n't", " not")
-            .replace("'re", " are")
-            .replace("'m", " am")
-            .replace("'ve", " have")
-            .replace("'ll", " will");
-        expanded
-            .split(|c: char| !c.is_alphanumeric())
-            .filter(|t| !t.is_empty())
-            .map(|t| t.to_string())
-            .collect()
     }
 
     fn add(v: &mut [f32], key: &str, weight: f32) {
@@ -101,12 +116,15 @@ impl HashEmbedder {
 
 impl Embedder for HashEmbedder {
     fn model_id(&self) -> &str {
-        "hash-lexical-v1"
+        // v2: contraction handling changed, so every v1 vector is stale.
+        // Bumping the id is what invalidates them — `embed_model` is stored
+        // beside each vector and re-embedding is keyed off it (D12).
+        "hash-lexical-v2"
     }
 
     fn embed(&self, text: &str) -> Vec<f32> {
         let mut v = vec![0.0f32; DIM];
-        let tokens = Self::tokenize(text);
+        let tokens = normalize_tokens(text);
 
         for t in &tokens {
             Self::add(&mut v, t, 1.0);
@@ -156,7 +174,9 @@ mod onnx {
                     .with_show_download_progress(true),
             )
             .map_err(|e| e.to_string())?;
-            Ok(OnnxEmbedder { inner: Mutex::new(model) })
+            Ok(OnnxEmbedder {
+                inner: Mutex::new(model),
+            })
         }
     }
 
@@ -166,11 +186,13 @@ mod onnx {
         }
 
         fn embed(&self, text: &str) -> Vec<f32> {
-            self.embed_batch(&[text.to_string()]).pop().unwrap_or_else(|| vec![0.0; DIM])
+            self.embed_batch(&[text.to_string()])
+                .pop()
+                .unwrap_or_else(|| vec![0.0; DIM])
         }
 
         fn embed_batch(&self, texts: &[String]) -> Vec<Vec<f32>> {
-            let mut guard = match self.inner.lock() {
+            let guard = match self.inner.lock() {
                 Ok(g) => g,
                 Err(p) => p.into_inner(),
             };
@@ -248,5 +270,28 @@ mod tests {
         let a = e.embed("don't call here again");
         let b = e.embed("do not call here again");
         assert!(cosine(&a, &b) > 0.9, "got {}", cosine(&a, &b));
+    }
+
+    /// A blanket `n't` -> ` not` rule turned "can't" into "ca not" and "won't"
+    /// into "wo not", throwing away the verb. "I can't afford that" and "I won't
+    /// be switching" are different objections and both stems matter.
+    #[test]
+    fn irregular_contractions_keep_their_stem() {
+        assert_eq!(
+            normalize_tokens("I can't afford that"),
+            ["i", "can", "not", "afford", "that"]
+        );
+        assert_eq!(
+            normalize_tokens("I won't be switching"),
+            ["i", "will", "not", "be", "switching"]
+        );
+        assert_eq!(normalize_tokens("cannot help"), ["can", "not", "help"]);
+        // The regular rule still applies.
+        assert_eq!(normalize_tokens("don't call"), ["do", "not", "call"]);
+
+        let e = HashEmbedder::new();
+        let a = e.embed("I can't afford that");
+        let b = e.embed("I cannot afford that");
+        assert!(cosine(&a, &b) > 0.95, "got {}", cosine(&a, &b));
     }
 }

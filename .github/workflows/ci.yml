@@ -33,6 +33,14 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets
 
+      # The ONNX path is the *real* gate (docs/DECISIONS.md D6); the default
+      # embedder is a CI fixture. Without this the shipped gate is never
+      # compiled in CI and rots silently. `check` rather than `test` so no
+      # model weights are downloaded.
+      - name: Check the ONNX gate compiles
+        if: matrix.os == 'ubuntu-latest'
+        run: cargo check -p riposte-detect --features onnx
+
       - name: Test
         run: cargo test --workspace
 
@@ -45,7 +53,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=0
-          for t in comply_objections_never_reach_llm; do
+          for t in comply_objections_never_reach_llm comply_wins_a_mixed_utterance; do
             if ! cargo test --workspace -- --list 2>/dev/null | grep -q "$t"; then
               echo "::error::required invariant test missing: $t"
               missing=1
@@ -71,3 +79,14 @@ jobs:
         run: |
           cargo run -q -p riposte-cli -- detect --text "yeah I never filled out any form" --all
           cargo run -q -p riposte-cli -- detect --text "take me off your list"
+
+      # A removal request stated alongside another objection must never be
+      # served a rebuttal. See docs/DECISIONS.md D11 — this regressed once and
+      # the failure is silent, so it is asserted end to end and not only in a
+      # unit test.
+      - name: Compliance — a mixed utterance selects the comply card
+        run: |
+          out=$(cargo run -q -p riposte-cli -- detect --text "I already have insurance, quit calling")
+          echo "$out"
+          echo "$out" | grep -q comply || {
+            echo "::error::a removal request was served a rebuttal"; exit 1; }

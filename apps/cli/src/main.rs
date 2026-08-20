@@ -4,8 +4,8 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use riposte_core::{CardOrigin, Objection, ObjectionKind};
-use riposte_detect::{DetectionGate, Embedder, HashEmbedder};
-use riposte_playbook::PlaybookFile;
+use riposte_detect::{select_hit, DetectionGate, Embedder, HashEmbedder};
+use riposte_playbook::{OnCollision, PlaybookFile};
 use riposte_store::Store;
 
 // Palette from docs/05-UX-SPEC.md §2, as truecolor escapes.
@@ -67,9 +67,36 @@ enum Command {
 #[derive(Subcommand)]
 enum PlaybookCmd {
     /// Import a playbook YAML and make it active
-    Import { path: String },
+    Import {
+        path: String,
+        /// What to do when an objection id already belongs to another playbook
+        #[arg(long, value_enum, default_value_t = Collision::Replace)]
+        on_collision: Collision,
+    },
+    /// Write the active playbook back out as YAML
+    Export { path: String },
     /// List imported playbooks
     List,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum Collision {
+    /// Take the id over from the playbook that holds it
+    Replace,
+    /// Import under a suffixed id, leaving the original alone
+    KeepBoth,
+    /// Leave the existing objection; do not import this entry
+    Skip,
+}
+
+impl From<Collision> for OnCollision {
+    fn from(c: Collision) -> Self {
+        match c {
+            Collision::Replace => OnCollision::Replace,
+            Collision::KeepBoth => OnCollision::KeepBoth,
+            Collision::Skip => OnCollision::Skip,
+        }
+    }
 }
 
 #[derive(Args)]
@@ -80,6 +107,10 @@ struct DetectArgs {
     /// Show every objection's score, not just the hit
     #[arg(long)]
     all: bool,
+    /// Score without recording a card. Use when probing or calibrating, so
+    /// experiments do not pollute the PRD §7 usage metric.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 fn embedder(use_onnx: bool) -> Result<Box<dyn Embedder>> {
@@ -97,9 +128,9 @@ fn embedder(use_onnx: bool) -> Result<Box<dyn Embedder>> {
 }
 
 fn active_playbook(store: &Store) -> Result<(String, Vec<Objection>)> {
-    let id = store
-        .active_playbook_id()?
-        .context("no active playbook — run `riposte playbook import playbooks/insurance-cold-call.yaml`")?;
+    let id = store.active_playbook_id()?.context(
+        "no active playbook — run `riposte playbook import playbooks/insurance-cold-call.yaml`",
+    )?;
     let objections = store.load_objections(&id)?;
     Ok((id, objections))
 }
@@ -109,18 +140,50 @@ fn main() -> Result<()> {
     let store = Store::open(&cli.db).with_context(|| format!("opening {}", cli.db))?;
 
     match cli.command {
-        Command::Playbook(PlaybookCmd::Import { path }) => {
+        Command::Playbook(PlaybookCmd::Import { path, on_collision }) => {
             let pb = PlaybookFile::load(&path)?;
-            let report = riposte_playbook::import(&store, &pb)?;
-            println!(
-                "{LIVE}✓{RESET} imported {BOLD}{}{RESET}",
-                report.name
-            );
+            let report = riposte_playbook::import_with(&store, &pb, on_collision.into())?;
+
+            // Embed at save time, not per evaluation. See docs/DECISIONS.md D12.
+            let emb = embedder(cli.onnx)?;
+            let started = std::time::Instant::now();
+            let embedded =
+                riposte_detect::embed_playbook(&store, &report.playbook_id, emb.as_ref())?;
+            let embed_ms = started.elapsed().as_millis();
+            println!("{LIVE}✓{RESET} imported {BOLD}{}{RESET}", report.name);
             println!(
                 "  {} objections · {} on the rail · {} compliance {DIM}(never refined){RESET}",
                 report.objections_imported, report.rail_slots_filled, report.comply_entries
             );
+            if report.documents_declared > 0 {
+                println!(
+                    "  {} documents declared · {} objection links {DIM}(content ingested at M3){RESET}",
+                    report.documents_declared, report.doc_links
+                );
+            }
+            println!(
+                "  {} phrases embedded with {} {DIM}({embed_ms} ms){RESET}",
+                embedded,
+                emb.model_id()
+            );
+            for w in &report.warnings {
+                println!("  {COMPLY}!{RESET} {w}");
+            }
             println!("  {DIM}active playbook: {}{RESET}", report.playbook_id);
+        }
+
+        Command::Playbook(PlaybookCmd::Export { path }) => {
+            let id = store
+                .active_playbook_id()?
+                .context("no active playbook to export")?;
+            let pb = PlaybookFile::from_store(&store, &id)?;
+            pb.export(&path)?;
+            println!("{LIVE}✓{RESET} exported {BOLD}{}{RESET} to {path}", pb.name);
+            println!(
+                "  {} objections · {} documents {DIM}(no transcripts, feedback, or secrets){RESET}",
+                pb.objections.len(),
+                pb.documents.len()
+            );
         }
 
         Command::Playbook(PlaybookCmd::List) => {
@@ -130,7 +193,11 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             for p in rows {
-                let marker = if p.is_active { format!("{LIVE}●{RESET}") } else { " ".into() };
+                let marker = if p.is_active {
+                    format!("{LIVE}●{RESET}")
+                } else {
+                    " ".into()
+                };
                 println!(
                     "{marker} {BOLD}{}{RESET}  {DIM}v{} · {} objections · {}{RESET}",
                     p.name, p.schema_version, p.objection_count, p.id
@@ -141,11 +208,15 @@ fn main() -> Result<()> {
         Command::Rail => {
             let (_, objections) = active_playbook(&store)?;
             println!();
-            println!("  {DIM}QUICK RESPONSE RAIL{RESET}  {DIM}· no model · no network · 0 ms{RESET}");
+            println!(
+                "  {DIM}QUICK RESPONSE RAIL{RESET}  {DIM}· no model · no network · 0 ms{RESET}"
+            );
             println!();
 
-            let mut rail: Vec<&Objection> =
-                objections.iter().filter(|o| o.rail_slot.is_some() && o.enabled).collect();
+            let mut rail: Vec<&Objection> = objections
+                .iter()
+                .filter(|o| o.rail_slot.is_some() && o.enabled)
+                .collect();
             rail.sort_by_key(|o| o.rail_slot);
 
             for o in &rail {
@@ -159,18 +230,34 @@ fn main() -> Result<()> {
                 println!("   {c}▌{slot}▐{RESET}  {}{}", o.label, tag);
             }
 
-            let below = objections.iter().filter(|o| o.rail_slot.is_none() && o.enabled).count();
+            let below = objections
+                .iter()
+                .filter(|o| o.rail_slot.is_none() && o.enabled)
+                .count();
             println!();
             println!("  {DIM}⌄ more ({below}){RESET}");
             println!();
         }
 
         Command::Detect(args) => {
-            let (_, objections) = active_playbook(&store)?;
+            let (playbook_id, objections) = active_playbook(&store)?;
             let emb = embedder(cli.onnx)?;
+
+            // Load the vectors written at import rather than re-embedding the
+            // whole playbook. See docs/DECISIONS.md D12.
             let started = std::time::Instant::now();
-            let gate = DetectionGate::build(&objections, emb.as_ref());
+            let vectors = store.load_trigger_vectors(&playbook_id, emb.model_id())?;
+            let gate = DetectionGate::from_vectors(&objections, &vectors, emb.model_id());
             let build_ms = started.elapsed().as_millis();
+
+            let missing = gate.missing_vectors();
+            if !missing.is_empty() {
+                eprintln!(
+                    "  {COMPLY}! {} objection(s) have no {} vectors — re-run `playbook import`{RESET}",
+                    missing.len(),
+                    emb.model_id()
+                );
+            }
 
             let scored = std::time::Instant::now();
             let scores = gate.score(&args.text, emb.as_ref());
@@ -179,7 +266,7 @@ fn main() -> Result<()> {
             println!();
             println!("  {DIM}prospect:{RESET} \"{}\"", args.text);
             println!(
-                "  {DIM}{} objections · {} · embed+score {}µs · index build {}ms{RESET}",
+                "  {DIM}{} objections · {} · embed+score {}µs · index load {}ms{RESET}",
                 gate.objection_count(),
                 gate.model_id(),
                 gate_us,
@@ -187,12 +274,39 @@ fn main() -> Result<()> {
             );
             println!();
 
-            let hit = scores.iter().find(|s| s.is_hit());
+            // Same selection rule as the pipeline: comply wins outright.
+            let hit = select_hit(&scores);
             match hit {
                 Some(s) => {
+                    // Record it. Without this `riposte stats` reported
+                    // detected = 0 forever while presenting itself as the
+                    // manual-vs-detected split.
+                    if !args.dry_run {
+                        store.record_card(
+                            &riposte_store::new_card_id(),
+                            None,
+                            None,
+                            &s.objection_id,
+                            CardOrigin::Detected,
+                            s.kind,
+                            1,
+                            &objections
+                                .iter()
+                                .find(|o| o.id == s.objection_id)
+                                .map(|o| o.response.clone())
+                                .unwrap_or_default(),
+                            Some(&s.matched_text),
+                            Some(s.score),
+                            Some(gate_us as i64 / 1000),
+                        )?;
+                    }
                     let c = kind_color(s.kind);
                     let objection = objections.iter().find(|o| o.id == s.objection_id).unwrap();
-                    println!("  {c}▌●▐{RESET}  {BOLD}{}{RESET}   {c}{}{RESET}", s.label, s.kind.as_str());
+                    println!(
+                        "  {c}▌●▐{RESET}  {BOLD}{}{RESET}   {c}{}{RESET}",
+                        s.label,
+                        s.kind.as_str()
+                    );
                     println!(
                         "        {DIM}score {:.3} ≥ threshold {:.2}  ·  matched \"{}\"{RESET}",
                         s.score, s.threshold, s.best_trigger
@@ -209,7 +323,9 @@ fn main() -> Result<()> {
                     }
                     if s.kind == ObjectionKind::Comply {
                         println!();
-                        println!("        {COMPLY}▲ compliance response — never sent to a model{RESET}");
+                        println!(
+                            "        {COMPLY}▲ compliance response — never sent to a model{RESET}"
+                        );
                     }
                 }
                 None => {
@@ -224,9 +340,16 @@ fn main() -> Result<()> {
 
             if args.all {
                 println!();
-                println!("  {DIM}{:<28} {:>7} {:>7} {:>7} {:>7}{RESET}", "objection", "pos", "neg", "score", "thresh");
+                println!(
+                    "  {DIM}{:<28} {:>7} {:>7} {:>7} {:>7}{RESET}",
+                    "objection", "pos", "neg", "score", "thresh"
+                );
                 for s in &scores {
-                    let mark = if s.is_hit() { format!("{LIVE}✓{RESET}") } else { " ".into() };
+                    let mark = if s.is_hit() {
+                        format!("{LIVE}✓{RESET}")
+                    } else {
+                        " ".into()
+                    };
                     println!(
                         "{mark} {:<28} {:>7.3} {:>7.3} {:>7.3} {:>7.2}",
                         s.label, s.positive, s.negative, s.score, s.threshold
@@ -246,11 +369,19 @@ fn main() -> Result<()> {
             // Layer 0, origin manual_hotkey, no call and no session. This is
             // the PRD's primary success metric and it must be recordable with
             // nothing else running. See docs/DECISIONS.md D1.
-            let card_id = format!("card_{}", riposte_store::now_ms());
+            let card_id = riposte_store::new_card_id();
             store.record_card(
-                &card_id, None, None, &o.id,
-                CardOrigin::ManualHotkey, o.kind,
-                0, &o.response, None, None, None,
+                &card_id,
+                None,
+                None,
+                &o.id,
+                CardOrigin::ManualHotkey,
+                o.kind,
+                0,
+                &o.response,
+                None,
+                None,
+                None,
             )?;
 
             let c = kind_color(o.kind);

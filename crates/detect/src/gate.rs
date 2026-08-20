@@ -4,7 +4,7 @@
 //! Pure and synchronous: takes the far-end window, returns at most one hit.
 //! Rejecting here costs nothing; only a hit goes on to spend an LLM call.
 
-use crate::embed::{cosine, Embedder};
+use crate::embed::{cosine, normalize_tokens, Embedder};
 use riposte_core::{Objection, ObjectionKind, Speaker, Utterance};
 
 /// Weight applied to the best negative-trigger match. Subtracting rather than
@@ -46,13 +46,39 @@ impl Score {
     }
 }
 
+/// The one hit to act on, from an already-sorted score list.
+///
+/// A qualifying `comply` entry wins outright, whatever outscored it. Selecting
+/// purely by score means a prospect saying "I already have insurance, quit
+/// calling" is served a rebuttal for a removal request — the exact failure
+/// `docs/06-COMPLIANCE.md` §3 exists to prevent. Every other enforcement layer
+/// protects what happens *after* the objection is chosen; this protects the
+/// choice itself.
+///
+/// Shared by [`DetectionGate::evaluate`] and the CLI so the two cannot drift.
+pub fn select_hit(scores: &[Score]) -> Option<&Score> {
+    scores
+        .iter()
+        .find(|s| s.kind == ObjectionKind::Comply && s.is_hit())
+        .or_else(|| scores.iter().find(|s| s.is_hit()))
+}
+
+/// A trigger phrase with everything the gate needs to match it: the embedding
+/// for the semantic path, and the normalised tokens for the lexical comply
+/// scan described on [`comply_containment`].
+struct Trigger {
+    phrase: String,
+    vector: Vec<f32>,
+    tokens: Vec<String>,
+}
+
 struct Entry {
     objection_id: String,
     label: String,
     kind: ObjectionKind,
     threshold: f32,
-    positives: Vec<(String, Vec<f32>)>,
-    negatives: Vec<(String, Vec<f32>)>,
+    positives: Vec<Trigger>,
+    negatives: Vec<Trigger>,
 }
 
 pub struct DetectionGate {
@@ -72,20 +98,78 @@ impl DetectionGate {
                 label: o.label.clone(),
                 kind: o.kind,
                 threshold: o.effective_threshold(),
-                positives: o
-                    .triggers
-                    .iter()
-                    .map(|p| (p.clone(), embedder.embed(p)))
-                    .collect(),
+                positives: o.triggers.iter().map(|p| trigger(p, embedder)).collect(),
                 negatives: o
                     .negative_triggers
                     .iter()
-                    .map(|p| (p.clone(), embedder.embed(p)))
+                    .map(|p| trigger(p, embedder))
                     .collect(),
             })
             .collect();
 
-        DetectionGate { entries, model_id: embedder.model_id().to_string() }
+        DetectionGate {
+            entries,
+            model_id: embedder.model_id().to_string(),
+        }
+    }
+
+    /// Builds the gate from embeddings already in the store, so a playbook is
+    /// embedded once at import rather than on every evaluation.
+    ///
+    /// `DetectionGate::build` re-embeds every trigger phrase each time it is
+    /// called. That is free with [`HashEmbedder`] but costs seconds with
+    /// BGE-small, which made the live pipeline impossible — `M1` of
+    /// `docs/07-BUILD-PLAN.md` specifies embedding "at playbook save time".
+    ///
+    /// Phrases with no stored vector for `model_id` are skipped rather than
+    /// embedded on the fly: a partially embedded playbook is a bug in the
+    /// import path, and silently papering over it would hide the seconds it
+    /// costs. Callers run [`missing_vectors`] first.
+    pub fn from_vectors(
+        objections: &[Objection],
+        vectors: &[riposte_store::TriggerVector],
+        model_id: &str,
+    ) -> Self {
+        let entries = objections
+            .iter()
+            .filter(|o| o.enabled)
+            .map(|o| {
+                let mine = |positive: bool| -> Vec<Trigger> {
+                    vectors
+                        .iter()
+                        .filter(|v| v.objection_id == o.id && v.positive == positive)
+                        .map(|v| Trigger {
+                            phrase: v.phrase.clone(),
+                            vector: v.vector.clone(),
+                            tokens: normalize_tokens(&v.phrase),
+                        })
+                        .collect()
+                };
+                Entry {
+                    objection_id: o.id.clone(),
+                    label: o.label.clone(),
+                    kind: o.kind,
+                    threshold: o.effective_threshold(),
+                    positives: mine(true),
+                    negatives: mine(false),
+                }
+            })
+            .collect();
+
+        DetectionGate {
+            entries,
+            model_id: model_id.to_string(),
+        }
+    }
+
+    /// Enabled objections that have no stored positive vectors — i.e. the
+    /// playbook was never embedded for this model, or was edited since.
+    pub fn missing_vectors(&self) -> Vec<&str> {
+        self.entries
+            .iter()
+            .filter(|e| e.positives.is_empty())
+            .map(|e| e.objection_id.as_str())
+            .collect()
     }
 
     pub fn model_id(&self) -> &str {
@@ -97,19 +181,31 @@ impl DetectionGate {
     }
 
     fn score_one(&self, e: &Entry, vec: &[f32], text: &str) -> Score {
-        let (best_trigger, positive) = e
+        let (mut best_trigger, positive) = e
             .positives
             .iter()
-            .map(|(p, v)| (p.as_str(), cosine(vec, v)))
+            .map(|t| (t.phrase.as_str(), cosine(vec, &t.vector)))
             .fold(("", f32::MIN), |acc, x| if x.1 > acc.1 { x } else { acc });
 
         let negative = e
             .negatives
             .iter()
-            .map(|(_, v)| cosine(vec, v))
+            .map(|t| cosine(vec, &t.vector))
             .fold(0.0f32, f32::max);
 
-        let positive = if positive == f32::MIN { 0.0 } else { positive };
+        let mut positive = if positive == f32::MIN { 0.0 } else { positive };
+
+        // Compliance: a removal request stated inside a longer utterance must
+        // not be diluted below threshold by the words around it. See
+        // [`comply_containment`].
+        if e.kind == ObjectionKind::Comply {
+            if let Some(matched) = comply_containment(&e.positives, text) {
+                if positive < 1.0 {
+                    positive = 1.0;
+                    best_trigger = matched;
+                }
+            }
+        }
 
         Score {
             objection_id: e.objection_id.clone(),
@@ -168,14 +264,14 @@ impl DetectionGate {
             .collect()
     }
 
-    /// At most one hit — the highest scorer that clears its own threshold.
+    /// At most one hit, chosen by [`select_hit`].
     pub fn evaluate(&self, window: &[Utterance], embedder: &dyn Embedder) -> Option<GateHit> {
         if window.is_empty() {
             return None;
         }
         let candidates = Self::candidates(window);
         let scores = self.score_candidates(&candidates, embedder);
-        scores.into_iter().find(Score::is_hit).map(|s| GateHit {
+        select_hit(&scores).cloned().map(|s| GateHit {
             objection_id: s.objection_id,
             label: s.label,
             kind: s.kind,
@@ -192,6 +288,51 @@ impl DetectionGate {
     }
 }
 
+// ─── Compliance: lexical containment ─────────────────────────────────────
+
+fn trigger(phrase: &str, embedder: &dyn Embedder) -> Trigger {
+    Trigger {
+        phrase: phrase.to_string(),
+        vector: embedder.embed(phrase),
+        tokens: normalize_tokens(phrase),
+    }
+}
+
+/// Does this span contain a `comply` trigger verbatim, whatever else it says?
+///
+/// The embedding gate scores a whole span, so a removal request stated
+/// alongside anything else is diluted by the surrounding words. Measured on the
+/// shipped playbook: "quit calling" alone scores 1.000 against `obj_dnc`, but
+/// "I'm not looking for anything, quit calling" scores 0.387 — under `obj_dnc`'s
+/// 0.55 threshold — while "Not interested" fires at 0.725. The agent is then
+/// coached to rebut a withdrawal of consent.
+///
+/// D9's suffix scoring cannot help: it splits on *utterance* boundaries, and
+/// both clauses arrive in one ASR utterance.
+///
+/// So `comply` entries also get a lexical pass. If a trigger's tokens appear as
+/// a contiguous run anywhere in the span, it is a hit at full strength. This is
+/// exact rather than fuzzy — requiring the *whole* trigger contiguously means
+/// "don't call her at work, call me instead" does not match "don't call here
+/// again". It costs no embedding, it is immune to dilution by construction, and
+/// it behaves identically under any [`Embedder`], which matters because the
+/// semantic gate is not yet calibrated (`docs/PROJECT-STATUS.md` §3.1).
+///
+/// Erring toward firing is correct here: `obj_dnc` ships at threshold 0.55
+/// precisely because "a false positive here costs nothing".
+fn comply_containment<'a>(triggers: &'a [Trigger], span: &str) -> Option<&'a str> {
+    let haystack = normalize_tokens(span);
+    triggers
+        .iter()
+        .filter(|t| !t.tokens.is_empty() && t.tokens.len() <= haystack.len())
+        .find(|t| {
+            haystack
+                .windows(t.tokens.len())
+                .any(|w| w == t.tokens.as_slice())
+        })
+        .map(|t| t.phrase.as_str())
+}
+
 // ─── Window construction ─────────────────────────────────────────────────
 
 /// Objections build across turns — "Hmm." / "Yeah, I don't know." / "We're
@@ -199,10 +340,35 @@ impl DetectionGate {
 pub const WINDOW_TURNS: usize = 3;
 pub const WINDOW_MS: i64 = 30_000;
 
-/// The last [`WINDOW_TURNS`] prospect turns, or [`WINDOW_MS`], whichever is
-/// shorter. Agent turns are excluded: v1 detects on the prospect stream only
-/// (`docs/01-PRD.md` §8).
-pub fn build_window(utterances: &[Utterance]) -> Vec<Utterance> {
+/// Runtime tuning for window construction and dedupe.
+///
+/// `02-ARCHITECTURE.md` §5 requires these be config-exposed — "different
+/// dialers behave differently and this will need field tuning". The playbook
+/// carries them in its `settings:` block; before this they were parsed,
+/// discarded, and the gate used hardcoded constants regardless.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GateConfig {
+    pub window_turns: usize,
+    pub window_ms: i64,
+    pub dedupe_window_ms: i64,
+    pub card_lifetime_ms: i64,
+}
+
+impl Default for GateConfig {
+    fn default() -> Self {
+        GateConfig {
+            window_turns: WINDOW_TURNS,
+            window_ms: WINDOW_MS,
+            dedupe_window_ms: DEDUPE_WINDOW_MS,
+            card_lifetime_ms: 90_000,
+        }
+    }
+}
+
+/// The last [`GateConfig::window_turns`] prospect turns, or
+/// [`GateConfig::window_ms`], whichever is shorter. Agent turns are excluded:
+/// v1 detects on the prospect stream only (`docs/01-PRD.md` §8).
+pub fn build_window_with(utterances: &[Utterance], cfg: &GateConfig) -> Vec<Utterance> {
     let prospect: Vec<&Utterance> = utterances
         .iter()
         .filter(|u| u.speaker == Speaker::Prospect)
@@ -211,16 +377,21 @@ pub fn build_window(utterances: &[Utterance]) -> Vec<Utterance> {
     let Some(last) = prospect.last() else {
         return vec![];
     };
-    let cutoff = last.t_end_ms - WINDOW_MS;
+    let cutoff = last.t_end_ms - cfg.window_ms;
 
     prospect
         .iter()
         .rev()
-        .take(WINDOW_TURNS)
+        .take(cfg.window_turns)
         .filter(|u| u.t_end_ms >= cutoff)
         .rev()
         .map(|u| (*u).clone())
         .collect()
+}
+
+/// [`build_window_with`] using the shipped defaults.
+pub fn build_window(utterances: &[Utterance]) -> Vec<Utterance> {
+    build_window_with(utterances, &GateConfig::default())
 }
 
 pub fn window_text(window: &[Utterance]) -> String {
@@ -236,17 +407,36 @@ pub fn window_text(window: &[Utterance]) -> String {
 
 pub const DEDUPE_WINDOW_MS: i64 = 45_000;
 
-/// Suppresses a repeat of the same objection inside one call. Reset on
-/// `CallStarted` — a new prospect is a new chance to say the same thing.
+#[derive(Debug, Clone)]
+struct Seen {
+    objection_id: String,
+    /// When this objection *first* fired inside the current suppression
+    /// window. Deliberately not refreshed on a repeat — see
+    /// [`Dedupe::should_suppress`].
+    first_ms: i64,
+    /// Times it has fired since the last [`Dedupe::reset`], i.e. within this
+    /// call. Not reset when the suppression window expires: the count is a
+    /// property of the call, the window is a property of the card.
+    hits: u32,
+}
+
+/// Suppresses a repeat of the same objection inside one call, and counts the
+/// repeats so the call lifecycle can act on them.
+///
+/// Reset on `CallStarted` — a new prospect is a new chance to say the same
+/// thing.
 #[derive(Debug, Default)]
 pub struct Dedupe {
-    seen: Vec<(String, i64)>,
+    seen: Vec<Seen>,
     window_ms: i64,
 }
 
 impl Dedupe {
     pub fn new(window_ms: i64) -> Self {
-        Dedupe { seen: Vec::new(), window_ms }
+        Dedupe {
+            seen: Vec::new(),
+            window_ms,
+        }
     }
 
     pub fn with_default_window() -> Self {
@@ -254,18 +444,56 @@ impl Dedupe {
     }
 
     /// `true` if this hit should be suppressed. Records it either way.
+    ///
+    /// The window is measured from the objection's *first* fire, not its most
+    /// recent one. Refreshing the timestamp on every suppressed hit turns the
+    /// fixed 45 s window of `02-ARCHITECTURE.md` §7.1 into a sliding one, under
+    /// which a prospect repeating an objection every 40 s is suppressed for the
+    /// entire call and never gets a second card.
     pub fn should_suppress(&mut self, objection_id: &str, now_ms: i64) -> bool {
-        self.seen.retain(|(_, t)| now_ms - t < self.window_ms);
-        if let Some((_, t)) = self.seen.iter_mut().find(|(id, _)| id == objection_id) {
-            *t = now_ms;
-            return true;
+        let window = self.window_ms;
+        // Expire the suppression window without forgetting the call-level
+        // count, which D8 depends on.
+        for s in self.seen.iter_mut() {
+            if now_ms - s.first_ms >= window {
+                s.first_ms = i64::MIN;
+            }
         }
-        self.seen.push((objection_id.to_string(), now_ms));
-        false
+        match self
+            .seen
+            .iter_mut()
+            .find(|s| s.objection_id == objection_id)
+        {
+            Some(s) => {
+                s.hits += 1;
+                if s.first_ms == i64::MIN {
+                    s.first_ms = now_ms;
+                    false
+                } else {
+                    true
+                }
+            }
+            None => {
+                self.seen.push(Seen {
+                    objection_id: objection_id.to_string(),
+                    first_ms: now_ms,
+                    hits: 1,
+                });
+                false
+            }
+        }
     }
 
-    /// How many times this objection has fired since the last reset. Feeds the
+    /// How many times this objection has fired since the last [`Dedupe::reset`]
+    /// — i.e. within the current call, suppressed hits included. Feeds the
     /// repeat-denial escalation in `docs/DECISIONS.md` D8.
+    pub fn hits(&self, objection_id: &str) -> u32 {
+        self.seen
+            .iter()
+            .find(|s| s.objection_id == objection_id)
+            .map_or(0, |s| s.hits)
+    }
+
     pub fn reset(&mut self) {
         self.seen.clear();
     }
@@ -276,7 +504,13 @@ mod tests {
     use super::*;
     use crate::embed::HashEmbedder;
 
-    fn objection(id: &str, label: &str, kind: ObjectionKind, triggers: &[&str], negatives: &[&str]) -> Objection {
+    fn objection(
+        id: &str,
+        label: &str,
+        kind: ObjectionKind,
+        triggers: &[&str],
+        negatives: &[&str],
+    ) -> Objection {
         Objection {
             id: id.into(),
             label: label.into(),
@@ -294,39 +528,85 @@ mod tests {
             triggers: triggers.iter().map(|s| s.to_string()).collect(),
             negative_triggers: negatives.iter().map(|s| s.to_string()).collect(),
             doc_refs: vec![],
+            escalate_after_repeats: None,
         }
     }
 
     fn utt(text: &str, t: i64) -> Utterance {
-        Utterance { speaker: Speaker::Prospect, text: text.into(), t_start_ms: t, t_end_ms: t + 1000, from_preroll: false }
+        Utterance {
+            speaker: Speaker::Prospect,
+            text: text.into(),
+            t_start_ms: t,
+            t_end_ms: t + 1000,
+            from_preroll: false,
+        }
     }
 
     #[test]
     fn negative_triggers_reduce_the_score() {
         let e = HashEmbedder::new();
         let without = DetectionGate::build(
-            &[objection("a", "A", ObjectionKind::Rebut, &["I never filled out any form"], &[])],
+            &[objection(
+                "a",
+                "A",
+                ObjectionKind::Rebut,
+                &["I never filled out any form"],
+                &[],
+            )],
             &e,
         );
         let with = DetectionGate::build(
-            &[objection("a", "A", ObjectionKind::Rebut, &["I never filled out any form"], &["I filled out the form yesterday"])],
+            &[objection(
+                "a",
+                "A",
+                ObjectionKind::Rebut,
+                &["I never filled out any form"],
+                &["I filled out the form yesterday"],
+            )],
             &e,
         );
         let text = "I filled out the form yesterday";
         let s1 = without.score(text, &e)[0].score;
         let s2 = with.score(text, &e)[0].score;
-        assert!(s2 < s1, "negative trigger did not reduce score: {s1} -> {s2}");
+        assert!(
+            s2 < s1,
+            "negative trigger did not reduce score: {s1} -> {s2}"
+        );
     }
 
     #[test]
     fn window_keeps_only_prospect_turns() {
         let mut u = vec![utt("hello", 0)];
-        u.push(Utterance { speaker: Speaker::Agent, text: "hi there".into(), t_start_ms: 1000, t_end_ms: 2000, from_preroll: false });
+        u.push(Utterance {
+            speaker: Speaker::Agent,
+            text: "hi there".into(),
+            t_start_ms: 1000,
+            t_end_ms: 2000,
+            from_preroll: false,
+        });
         u.push(utt("not interested", 2000));
         let w = build_window(&u);
         assert_eq!(w.len(), 2);
         assert!(w.iter().all(|x| x.speaker == Speaker::Prospect));
         assert_eq!(window_text(&w), "hello not interested");
+    }
+
+    #[test]
+    fn window_config_actually_changes_the_window() {
+        let u: Vec<_> = (0..6).map(|i| utt(&format!("turn{i}"), i * 1000)).collect();
+        let cfg = GateConfig {
+            window_turns: 2,
+            ..GateConfig::default()
+        };
+        assert_eq!(window_text(&build_window_with(&u, &cfg)), "turn4 turn5");
+
+        // Turns end at t+1000, so the last ends at 6000. A 500 ms window puts
+        // the cutoff at 5500, past turn4's end of 5000.
+        let tight = GateConfig {
+            window_ms: 500,
+            ..GateConfig::default()
+        };
+        assert_eq!(window_text(&build_window_with(&u, &tight)), "turn5");
     }
 
     #[test]
@@ -348,13 +628,26 @@ mod tests {
     fn objection_split_across_turns_is_caught() {
         let e = HashEmbedder::new();
         let gate = DetectionGate::build(
-            &[objection("a", "Already covered", ObjectionKind::Rebut, &["we are already covered"], &[])],
+            &[objection(
+                "a",
+                "Already covered",
+                ObjectionKind::Rebut,
+                &["we are already covered"],
+                &[],
+            )],
             &e,
         );
         // Neither fragment alone is the trigger; together they are.
-        let u = vec![utt("hmm", 0), utt("yeah I don't know", 2000), utt("we are already covered", 4000)];
+        let u = vec![
+            utt("hmm", 0),
+            utt("yeah I don't know", 2000),
+            utt("we are already covered", 4000),
+        ];
         let w = build_window(&u);
-        assert!(gate.evaluate(&w, &e).is_some(), "multi-turn window should catch this");
+        assert!(
+            gate.evaluate(&w, &e).is_some(),
+            "multi-turn window should catch this"
+        );
     }
 
     #[test]
@@ -362,7 +655,10 @@ mod tests {
         let mut d = Dedupe::with_default_window();
         assert!(!d.should_suppress("obj_a", 0));
         assert!(d.should_suppress("obj_a", 10_000));
-        assert!(!d.should_suppress("obj_b", 10_000), "different objection is not suppressed");
+        assert!(
+            !d.should_suppress("obj_b", 10_000),
+            "different objection is not suppressed"
+        );
     }
 
     #[test]
@@ -372,18 +668,169 @@ mod tests {
         assert!(!d.should_suppress("obj_a", 46_000));
     }
 
+    /// The window runs from the objection's *first* fire. Refreshing it on
+    /// every suppressed hit makes it slide, and a prospect repeating an
+    /// objection just inside the window is then suppressed for the whole call.
+    #[test]
+    fn dedupe_window_is_fixed_not_sliding() {
+        let mut d = Dedupe::new(45_000);
+        assert!(!d.should_suppress("obj_a", 0));
+        // Repeats inside the window are suppressed and must not extend it.
+        assert!(d.should_suppress("obj_a", 40_000));
+        assert!(d.should_suppress("obj_a", 44_000));
+        assert!(
+            !d.should_suppress("obj_a", 46_000),
+            "window slid: 46s is past a window opened at 0"
+        );
+    }
+
+    /// D8 needs a count, and `PROJECT-STATUS.md` §4.4 claimed one already
+    /// existed. It did not — only a last-seen timestamp was stored.
+    #[test]
+    fn dedupe_counts_repeats_across_the_whole_call() {
+        let mut d = Dedupe::with_default_window();
+        assert_eq!(d.hits("obj_a"), 0);
+        d.should_suppress("obj_a", 0);
+        assert_eq!(d.hits("obj_a"), 1);
+        d.should_suppress("obj_a", 10_000); // suppressed, still a repeat
+        assert_eq!(d.hits("obj_a"), 2);
+        d.should_suppress("obj_a", 90_000); // new window, still the same call
+        assert_eq!(d.hits("obj_a"), 3, "count is per call, not per window");
+        d.reset();
+        assert_eq!(d.hits("obj_a"), 0, "a new call starts the count over");
+    }
+
     #[test]
     fn dedupe_resets_on_a_new_call() {
         let mut d = Dedupe::with_default_window();
         assert!(!d.should_suppress("obj_a", 0));
         d.reset();
-        assert!(!d.should_suppress("obj_a", 1000), "a new call is a new chance to object");
+        assert!(
+            !d.should_suppress("obj_a", 1000),
+            "a new call is a new chance to object"
+        );
+    }
+
+    // ─── Compliance: the gate's own selection ────────────────────────────
+    //
+    // These guard the failure demonstrated on the shipped playbook: a removal
+    // request stated in the same breath as another objection was served a
+    // rebuttal. See `comply_containment` and `select_hit`.
+
+    fn dnc_and_rebuttal() -> Vec<Objection> {
+        let mut dnc = objection(
+            "obj_dnc",
+            "Take me off your list",
+            ObjectionKind::Comply,
+            &["stop calling me", "quit calling", "take me off your list"],
+            &[],
+        );
+        dnc.threshold_authored = 0.55;
+        let mut rebut = objection(
+            "obj_not_interested",
+            "Not interested",
+            ObjectionKind::Rebut,
+            &["not interested", "I'm not looking for anything"],
+            &[],
+        );
+        rebut.threshold_authored = 0.64;
+        vec![rebut, dnc]
+    }
+
+    /// Required test. A withdrawal of consent inside a longer utterance is
+    /// never met with a rebuttal, however strongly the rebuttal scored.
+    #[test]
+    fn comply_wins_a_mixed_utterance() {
+        let e = HashEmbedder::new();
+        let gate = DetectionGate::build(&dnc_and_rebuttal(), &e);
+
+        for phrase in [
+            "I'm not looking for anything, quit calling",
+            "not interested, stop calling me",
+            "I'm not looking for anything and I want you to take me off your list",
+        ] {
+            let hit = gate
+                .evaluate(&[Utterance::prospect(phrase)], &e)
+                .unwrap_or_else(|| panic!("no hit at all for {phrase:?}"));
+            assert_eq!(
+                hit.kind,
+                ObjectionKind::Comply,
+                "{phrase:?} was served a {:?} card ({}) — docs/06-COMPLIANCE.md §3",
+                hit.kind,
+                hit.objection_id
+            );
+        }
+    }
+
+    /// The dilution half of the same defect. "quit calling" alone scores 1.000
+    /// against `obj_dnc`; one clause in front of it dropped the whole span to
+    /// 0.387, under the 0.55 threshold, so the comply entry never qualified and
+    /// could not have won on priority alone.
+    #[test]
+    fn dnc_survives_clause_dilution() {
+        let e = HashEmbedder::new();
+        let gate = DetectionGate::build(&dnc_and_rebuttal(), &e);
+        let diluted = gate.score("I'm not looking for anything, quit calling", &e);
+        let dnc = diluted
+            .iter()
+            .find(|s| s.objection_id == "obj_dnc")
+            .unwrap();
+        assert!(
+            dnc.is_hit(),
+            "DNC diluted to {:.3} against threshold {:.2}",
+            dnc.score,
+            dnc.threshold
+        );
+        assert_eq!(dnc.best_trigger, "quit calling");
+    }
+
+    /// Containment is exact, not fuzzy: a stray "don't call" in ordinary speech
+    /// must not be read as a removal request.
+    #[test]
+    fn containment_does_not_fire_on_a_partial_trigger() {
+        let e = HashEmbedder::new();
+        let mut dnc = objection(
+            "obj_dnc",
+            "Take me off your list",
+            ObjectionKind::Comply,
+            &["don't call here again"],
+            &[],
+        );
+        dnc.threshold_authored = 0.55;
+        let gate = DetectionGate::build(&[dnc], &e);
+        let hit = gate.evaluate(
+            &[Utterance::prospect(
+                "don't call her at work, call me on my cell instead",
+            )],
+            &e,
+        );
+        assert!(hit.is_none(), "partial trigger match fired: {hit:?}");
+    }
+
+    /// A rebuttable objection with no comply in play is unaffected.
+    #[test]
+    fn priority_does_not_suppress_ordinary_rebuttals() {
+        let e = HashEmbedder::new();
+        let gate = DetectionGate::build(&dnc_and_rebuttal(), &e);
+        let hit = gate
+            .evaluate(&[Utterance::prospect("not interested")], &e)
+            .expect("plain objection should still fire");
+        assert_eq!(hit.objection_id, "obj_not_interested");
     }
 
     #[test]
     fn empty_window_never_hits() {
         let e = HashEmbedder::new();
-        let gate = DetectionGate::build(&[objection("a", "A", ObjectionKind::Rebut, &["stop calling"], &[])], &e);
+        let gate = DetectionGate::build(
+            &[objection(
+                "a",
+                "A",
+                ObjectionKind::Rebut,
+                &["stop calling"],
+                &[],
+            )],
+            &e,
+        );
         assert!(gate.evaluate(&[], &e).is_none());
     }
 }

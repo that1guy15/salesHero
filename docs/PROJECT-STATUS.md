@@ -9,9 +9,115 @@ milestone should be. They are in §3 and they matter more than the code.
 
 ---
 
+## 0. Update — product review and M1.1 remediation
+
+A full product and code review was run over this repo after the M0/M1 handoff.
+It produced 21 findings; the compliance ones are fixed and recorded, the rest
+are tracked. **Read this section before §1–§4, which predate it.**
+
+### The finding that mattered
+
+**A removal request stated alongside another objection was served a rebuttal.**
+Measured on the shipped playbook:
+
+| utterance | card served, before the fix |
+|---|---|
+| "I'm not looking for anything, quit calling" | Not interested — **rebut**, 0.725 |
+| "now's not a good time, quit calling" | Not a good time — **rebut**, 0.842 |
+| "I already have insurance, quit calling" | Already have coverage — **rebut**, 0.797 |
+
+`"quit calling"` alone scores **1.000** against `obj_dnc`. One clause in front of
+it dragged the span to 0.387 — under the 0.55 threshold — so the compliance entry
+never qualified. The four enforcement layers in `06-COMPLIANCE.md` §3 all protect
+what happens *after* an objection is chosen. Nothing protected the choice.
+
+Fixed two ways, both in `crates/detect/src/gate.rs` — `select_hit` (comply wins
+outright) and `comply_containment` (comply also matches lexically, so dilution
+cannot bury it). Recorded as **D11**. Required test
+`comply_wins_a_mixed_utterance`, asserted end to end in CI.
+
+### Also fixed
+
+- **D8 built, not deferred.** The two prose guardrails in the playbook
+  ("if they deny it a second time…", "one attempt only") are now enforced via
+  `objections.escalate_after_repeats` and `decide_with_repeats`. §4.4 below
+  claimed `Dedupe` already tracked per-call repeats — **it did not**, it stored
+  only a last-seen timestamp, and it refreshed that timestamp on every
+  suppressed hit, turning the fixed 45 s window into a sliding one. Both fixed.
+- **Embeddings are stored at import** (**D12**). `phrases_needing_embedding`,
+  `set_embedding` and `load_trigger_vectors` existed with **zero callers**; the
+  gate re-embedded every trigger on every evaluation. Seconds per detection
+  under BGE-small, against a Layer 1 budget of 700–900 ms.
+- **Import is genuinely atomic.** `Store::with_tx` replaces bare
+  `BEGIN`/`COMMIT`, and activation moved inside the boundary — it used to run
+  after the commit, so a failure there left an imported-but-inactive playbook.
+- **Migration tests are real.** `migrations_apply_and_are_idempotent` asserted
+  only `schema_version() == 1` and never re-ran the migrator. Replaced with a
+  genuine idempotency test and the v1-fixture test `03-DATA-MODEL.md` §5 asks
+  for. Schema is now at version 2.
+- **CI was red on `main`.** `cargo fmt --all -- --check` failed across all six
+  source files. CI also never compiled `--features onnx`, so the *real* gate had
+  rotted to an `unused_mut` warning — a hard failure under `-D warnings`. Both
+  fixed, and the ONNX check added to CI so it cannot recur.
+
+### M1.1 is complete
+
+All 21 findings are closed. Beyond the compliance work above:
+
+- **Nothing the user authored is discarded any more** (**D13**). `doc_refs`,
+  the `documents:` block and `PlaybookSettings` were all parsed and dropped —
+  `objection_docs` had no writer at all, and the gate used hardcoded constants
+  while the playbook's own tuning knobs did nothing. Migration `0003` lets a
+  document be *declared* before its content exists, which is the actual state
+  of a bare-YAML import.
+- **M0's four acceptance criteria are closed** (**D14**). Export now exists, so
+  the required round-trip test could finally be written; the byte-identical
+  criterion is restated as *export → import → export*, which is achievable and
+  is the property actually worth having. Rail-slot collisions bump-and-warn as
+  `03-DATA-MODEL.md` §3 specifies rather than rejecting the import.
+  `OnCollision::{Replace, KeepBoth, Skip}` implements the id-collision policy —
+  and `playbook_id` now transfers on Replace, which it did not, so an objection
+  stayed with its old playbook while the importing one believed it had taken it.
+- **Quality batch** (**D15**): card ids could collide inside a millisecond and
+  drop a rail press — the exact event the headline metric counts; `detect`
+  recorded nothing so `stats` read "the AI is never used" by construction; a
+  corrupt `kind` downgraded silently to a compliance card; the tokenizer turned
+  "can't" into "ca not".
+
+**Verified green:** 72 tests, `cargo fmt --check` clean, clippy clean under
+`-D warnings` on both the default and `onnx` feature sets, and every M0/M1
+runnable criterion produces its specified output.
+
+### Next
+
+**M1.5 — gate calibration.** §3.1 below is unchanged and still the blocker on
+M2. Nothing in M1.1 touched the thresholds; they remain uncalibrated, and the
+default embedder remains a CI fixture rather than a shippable gate.
+
+### Sequencing changed
+
+Two milestones inserted, agreed with the product owner:
+
+- **M1.5 — gate calibration.** §3.1 below, unchanged, and it **gates M2**.
+- **M1.7 — rail overlay v0, Layer 0 only, to real agents.** The PRD's headline
+  metric — rail use without AI — needs no audio, no ASR and no LLM. The original
+  order spent the entire audio budget before any agent touched the product.
+  `AGENTS.md`'s "do not begin at M4" forbids an overlay on *unmeasured
+  detection*; a Layer-0 overlay has no detection to be unmeasured.
+
+A **physical Windows 11 machine is available**, which retires the platform risk
+described in §4.1 below. Read §4.1 as history.
+
+See `docs/DECISIONS.md` D8, D11, D12 and `.claude/skills/` for the review
+workflows (`invariant-audit`, `compliance-review`, `gate-calibration`,
+`playbook-lint`, `insurance-domain`, `milestone`, `windows-verify`).
+
+---
+
 ## 1. What is built
 
-Cargo workspace, five crates, 37 tests passing, no warnings.
+Cargo workspace, five crates, **56 tests passing**, no warnings, `cargo fmt`
+clean. (Was 37 at the original handoff — see §0.)
 
 | Crate | State | What it does |
 |---|---|---|
@@ -251,10 +357,17 @@ to M5 which owns card lifecycle.
 This matters beyond ethics: it is the difference between a tool that coaches an
 agent to push past a withdrawal of consent and one that does not.
 
+> **Superseded — see §0.** Both are now enforced structurally, via
+> `objections.escalate_after_repeats` and `decide_with_repeats`. D8 is built,
+> not deferred. One correction to the paragraph above: `Dedupe` did **not**
+> track per-call repeats. It stored a last-seen timestamp only, and refreshed it
+> on every suppressed hit, which also turned the fixed 45 s window into a
+> sliding one. Both fixed.
+
 ### 4.5 Working with a team of agents on this codebase
 
 - **Rust build times dominate.** The dependency graph (`ort`, `fastembed`,
-  `tauri`, bundled SQLite) is heavy; `target/` is already 1.6 GB. Parallel agents
+  `tauri`, bundled SQLite) is heavy; a full `target/` runs to gigabytes. Parallel agents
   in separate worktrees each get their own target directory. Use a shared
   `CARGO_TARGET_DIR` or `sccache`, and prefer `cargo check` in the inner loop.
 - **One decision log, not per-document sections.** `AGENTS.md` says to record
