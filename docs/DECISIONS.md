@@ -150,3 +150,299 @@ is also the correct text to learn a negative trigger from.
 
 **Why:** every link in the repo was broken, including the four commands in
 `07-BUILD-PLAN.md`.
+
+## D11 — `comply` wins the gate, and is matched lexically as well as semantically
+
+**Specified:** `04-CONTRACTS.md` §4 — `DetectionGate::evaluate` "takes the far-end
+window and returns at most one hit," scored by
+`max cosine over positives − 0.5 × max cosine over negatives`, hit if
+`score ≥ objection.threshold`. Nothing orders two simultaneous hits, and nothing
+treats `comply` differently at selection time.
+
+**Changed:** two things, both in `crates/detect/src/gate.rs`.
+
+1. `select_hit` — a qualifying `comply` entry wins outright, whatever outscored
+   it. Shared by `evaluate` and the CLI so they cannot drift.
+2. `comply_containment` — `comply` entries additionally match lexically. If a
+   trigger's normalised tokens appear as a contiguous run anywhere in the span,
+   it scores 1.0.
+
+**Why:** measured on the shipped playbook, before the change:
+
+| utterance | card served |
+|---|---|
+| "I'm not looking for anything, quit calling" | **Not interested — rebut**, 0.725 |
+| "now's not a good time, quit calling" | **Not a good time — rebut**, 0.842 |
+| "I already have insurance, quit calling" | **Already have coverage — rebut**, 0.797 |
+
+In isolation `"quit calling"` scores **1.000** against `obj_dnc`. One clause in
+front of it drags the span to **0.387** — under `obj_dnc`'s 0.55 threshold — so
+the compliance entry did not even qualify, and the agent was coached to rebut a
+withdrawal of consent.
+
+Both halves were needed. Priority alone does not help when dilution keeps the
+comply entry under threshold. Containment alone does not help when both entries
+qualify and the rebuttal scores higher — which `"I have an agent, remove me from
+your list"` already did (DNC 0.728, Already-covered 0.629), decided by score
+ordering rather than by rule.
+
+D9's suffix scoring cannot address this: it splits on *utterance* boundaries and
+both clauses arrive in one ASR utterance.
+
+Containment is exact rather than fuzzy — the *whole* trigger must appear
+contiguously — so "don't call her at work, call me instead" does not match the
+trigger "don't call here again". Erring toward firing is nevertheless correct
+here: `obj_dnc` ships at 0.55 precisely because *"a false positive here costs
+nothing"* (`03-DATA-MODEL.md` §3). It costs no embedding, is immune to dilution
+by construction, and behaves identically under any `Embedder` — which matters
+while the semantic gate is uncalibrated (`PROJECT-STATUS.md` §3.1).
+
+This is a fifth enforcement layer for `06-COMPLIANCE.md` §3, and the first that
+protects *which* objection is chosen. The other four all protect what happens
+after the choice is already made.
+
+Tests: `comply_wins_a_mixed_utterance` (required), `dnc_survives_clause_dilution`,
+`containment_does_not_fire_on_a_partial_trigger`,
+`priority_does_not_suppress_ordinary_rebuttals`.
+
+## D8 — *(built)* Repeat denial escalates to the compliance card
+
+Recorded above as *proposed, not built*, and deferred to M5. Built now instead:
+it is the ethical core of the product and the remaining half of the compliance
+gap D11 opened up.
+
+**Two corrections to the original D8 note.** It claimed *"`Dedupe` already
+tracks per-call repeats, so a second hit … should promote the `comply` card"*
+(and `PROJECT-STATUS.md` §4.4 repeated it). `Dedupe` tracked only a last-seen
+timestamp — there was no count. It also refreshed that timestamp on every
+suppressed hit, turning the fixed 45 s window of `02-ARCHITECTURE.md` §7.1 into
+a sliding one, under which a prospect repeating an objection every 40 s is
+suppressed for the entire call.
+
+**Built:**
+
+- `Dedupe` measures its window from an objection's *first* fire, and carries a
+  per-call `hits` count that survives window expiry.
+  Tests: `dedupe_window_is_fixed_not_sliding`, `dedupe_counts_repeats_across_the_whole_call`.
+- `objections.escalate_after_repeats` (migration `0002_escalation.sql`), exposed
+  in the playbook YAML. `NULL`/absent means no escalation.
+- `decide_with_repeats(objection, repeats, comply)` serves the playbook's
+  compliance card once the count is reached, tagging it `escalated_from` so the
+  transcript records what the prospect actually repeated.
+- The shipped playbook arms it on `obj_no_form` and `obj_not_interested` at 2 —
+  the two entries whose guardrails already said so in prose.
+
+An escalated card is a `comply` card, so invariant 4 still holds over it:
+`an_escalated_card_still_cannot_reach_the_llm`.
+
+**Why a playbook field rather than hardcoded ids:** an agency authoring its own
+playbook has the same obligation, and hardcoding `obj_no_form` would leave their
+entries unprotected. The behaviour belongs to the objection, not to this file.
+
+**Kept:** escalation with no `comply` entry in the playbook leaves the rebuttal
+standing rather than dropping the card. Serving nothing would be defensible, but
+silently swallowing a detection is worse than the rebuttal and harder to notice.
+Test: `escalation_without_a_comply_entry_keeps_the_rebuttal`.
+
+## D12 — Trigger embeddings are stored, and reconciled rather than recreated
+
+**Specified:** `07-BUILD-PLAN.md` M1 — "trigger and negative-trigger embedding at
+playbook save time". `03-DATA-MODEL.md` §2 gives `triggers` and
+`negative_triggers` an embedding column (as a blob, per D5).
+
+**Found:** the storage path existed and was never called.
+`Store::phrases_needing_embedding`, `set_embedding` and `load_trigger_vectors`
+had **zero references anywhere in the workspace, including tests**. Nothing was
+ever embedded at save time. `DetectionGate::build` re-embedded every trigger
+phrase on every invocation.
+
+Harmless under `HashEmbedder` — 4 ms for the shipped playbook's 54 phrases — and
+disqualifying under BGE-small, where it is seconds per detection against a
+Layer 1 budget of 700–900 ms (`02-ARCHITECTURE.md` §10).
+
+**Changed:**
+
+- `detect::embed_playbook(store, playbook_id, embedder)` embeds what is missing
+  for that model and stores it. Called by `riposte playbook import`.
+- `DetectionGate::from_vectors(objections, vectors, model_id)` builds from
+  stored vectors. Used by `riposte detect`.
+- `DetectionGate::missing_vectors()` reports objections with no vectors for the
+  active model; the CLI warns rather than silently re-embedding, because a
+  partially embedded playbook is an import bug and hiding it hides the cost.
+- `Store::upsert_objection` now **reconciles** trigger rows against the playbook
+  instead of deleting and re-inserting them. Delete-and-recreate assigned new
+  row ids, so every re-import discarded every vector.
+
+`embed_model` is stored beside each vector, so switching embedder invalidates
+exactly the affected rows and re-embeds only those. Measured: first import of
+the shipped playbook embeds 54 phrases, a second embeds 0.
+
+Reconciliation also fixed something the old code got right by accident and would
+have lost: `learned` triggers (`03-DATA-MODEL.md` §4) are owned by feedback, not
+by the playbook file, and must survive a re-import.
+Test: `a_reimport_preserves_learned_triggers`.
+
+## D13 — Documents can be declared before their content exists
+
+**Specified:** `03-DATA-MODEL.md` §2 gives `documents` a `bytes BLOB NOT NULL`
+("original, for re-export"), because §3 embeds document content in the
+`.playbook` zip — *"a playbook is portable or it is useless"*.
+
+**Found:** three things parsed and silently discarded.
+
+- `doc_refs` was read off every objection and dropped. `objection_docs` had
+  **no writer anywhere in the codebase**, and `load_objections` hardcoded
+  `doc_refs: vec![]`. The shipped playbook declares four links; all were lost.
+- The `documents:` block was parsed into `DocumentEntry` and dropped.
+- `PlaybookSettings` — `gate_threshold_default`, `dedupe_window_ms`,
+  `card_lifetime_ms`, `preroll_ms` — was parsed and dropped, while the gate used
+  hardcoded constants. `02-ARCHITECTURE.md` §5 requires these be config-exposed
+  because *"different dialers behave differently and this will need field
+  tuning"*.
+
+**Changed:**
+
+- Migration `0003_declared_documents.sql` makes `documents.bytes` and
+  `ingested_at` nullable, and adds `declared_at`. **NULL bytes means "declared
+  by a playbook, content not yet ingested"** — which is the actual state of
+  affairs, since the unit of import today is a bare `playbook.yaml` and the zip
+  container is deferred to M7. `mime` is derived from the filename.
+- Import declares documents first (`objection_docs` has a foreign key onto
+  them), then writes the links, then the settings.
+- `Store::get_playbook_setting` / `set_playbook_setting`, namespaced
+  `playbook.<id>.<name>` so importing a second playbook does not silently
+  retune the first.
+- `GateConfig` replaces the hardcoded window and dedupe constants;
+  `detect::gate_config(store, playbook_id)` reads it back. Unparseable values
+  fall back to the shipped defaults — a bad setting should degrade tuning, not
+  stop detection.
+- Validation now rejects a `doc_refs` entry naming no declared document. That
+  was previously invisible, because the field was discarded before anything
+  could notice.
+
+**On rebuilding three tables in a migration:** SQLite cannot drop a NOT NULL
+constraint in place. This is safe *here specifically* without a data copy
+because nothing had ever written to `documents`, `doc_chunks` or
+`objection_docs` — that omission is the bug being fixed — so every database at
+schema version 2 has all three empty. The migration says so. Do not copy the
+pattern for a table that holds data.
+
+**Not built:** actual ingestion — reading a PDF/DOCX/MD/TXT, chunking, embedding
+into `doc_chunks`. That is M3, and `01-PRD.md` F9 owns it. What lands here is the
+manifest and the references, so that nothing the user authored is thrown away in
+the meantime.
+
+## D14 — M0's export criteria, restated and implemented
+
+`07-BUILD-PLAN.md` M0 lists four acceptance criteria. Three were unimplemented
+and one was unachievable as written. All four are now closed.
+
+### "Round-trip test: import → export → import produces byte-identical output"
+
+**There was no export.** `PlaybookFile::to_yaml` existed, was never called, and
+was never tested, so the round-trip test `AGENTS.md` requires could not exist.
+
+The criterion is also not achievable against the *hand-authored* file, and
+`PROJECT-STATUS.md` §4.2 was right to flag it — though for a smaller reason than
+the `exported_at` manifest field it names, since a bare YAML has no manifest.
+The real obstacle is that `playbooks/insurance-cold-call.yaml` carries comments,
+deliberate key ordering and block scalars, none of which any serializer
+reproduces.
+
+**Restated:** *export → import → export is byte-identical.* That is the property
+worth having — it is what makes export a dependable way to move a playbook
+between machines — and it is testable. Plus a second test asserting every
+authored field survives the trip, because byte-stability is worth little if
+fields are being dropped consistently.
+
+`PlaybookFile::from_store` reads back the **authored** threshold, never the
+learned one: a learned threshold is this machine's feedback history and
+`06-COMPLIANCE.md` §2 keeps feedback out of exports.
+Test: `export_carries_the_authored_threshold_not_the_learned_one`.
+
+### "Rail slot uniqueness enforced; collision on import warns and bumps"
+
+Implemented as a **hard rejection of the whole import** — not what
+`03-DATA-MODEL.md` §3 asks for ("later entry wins, earlier is bumped below fold,
+warn the user"), and hostile to anyone hand-editing a file.
+
+Now resolved during import: the last entry claiming a slot keeps it, earlier
+claimants are bumped to below-the-fold, and `ImportReport::warnings` carries the
+explanation. A slot *outside* 1–6 is still a hard error — that is a malformed
+file, not a resolvable conflict.
+
+### "Objection id collides with existing → replace, keep both, or skip"
+
+Absent. Import silently upserted, and because `upsert_objection`'s conflict
+clause did not touch `playbook_id`, an id held by another playbook stayed with
+its original owner while the importing playbook believed it had taken it.
+
+Added `OnCollision::{Replace, KeepBoth, Skip}` (`--on-collision` on the CLI,
+matching `04-CONTRACTS.md` §6's `import_playbook { onCollision }`), and
+`playbook_id` now transfers on `Replace`. Re-importing the *same* playbook is
+not a collision — that is an update, and it stays silent.
+
+### "Migration test passes from a v1 fixture"
+
+`migrations_apply_and_are_idempotent` asserted only `schema_version() == 1`,
+never re-ran the migrator, and had no fixture. Replaced with
+`migrations_are_idempotent` (which reopens a real file) and
+`migrates_from_a_v1_fixture_preserving_data`, which builds a v1 database from
+migration 1 alone and asserts the data survives to current.
+
+## D15 — Quality fixes from the M1.1 audit
+
+Small individually; collected here because several were invisible rather than
+merely untidy.
+
+**Card ids could collide.** `format!("card_{}", now_ms())` against a `TEXT
+PRIMARY KEY` — two rail presses inside one millisecond, and the second was lost.
+That is precisely the event `01-PRD.md` §7's headline metric counts.
+`new_card_id()` uses timestamp + process id + counter; machine-local uniqueness
+is sufficient, since §1 of the data model is one SQLite file per install with no
+hosted component to merge against.
+
+**`riposte detect` recorded nothing,** so `riposte stats` reported
+`detected = 0` forever while presenting itself as the manual-vs-detected split —
+the PRD's primary metric, reading as "the AI is never used". It now records a
+card with `origin: detected`. Added `--dry-run` for probing and calibration, so
+experiments do not pollute the metric.
+
+**A corrupt `kind` was silently downgraded to `Comply`.** Failing closed is
+right — a corrupt row must never become rebuttable — but doing it quietly turns
+an agent's rebuttal into a "do not respond" card with no indication. A canary
+query now returns `StoreError::BadKind`, which was defined and never
+constructed. A CHECK constraint makes this unreachable in practice; it exists to
+catch a bad migration or a tampered schema.
+
+**The tokenizer mangled irregular contractions.** A blanket `n't` → ` not` turned
+`"can't"` into `"ca not"` and `"won't"` into `"wo not"`, discarding the verb
+stem. "I can't afford that" and "I won't be switching" are different objections
+and both stems carry signal. Handled explicitly, and `HashEmbedder`'s model id
+bumped to `hash-lexical-v2` — which is what invalidates the stored vectors,
+since re-embedding is keyed off `embed_model` (D12). Verified against a live
+database: the stale vectors were detected, the CLI warned, and a re-import
+re-embedded exactly those rows.
+
+**`threshold_learned` survives a re-import** because `upsert_objection` omits it
+from the conflict clause. Correct — the file carries the authored default, the
+learned value is this machine's feedback history — but undocumented and
+untested, so nothing stopped someone "fixing" it. Now tested.
+
+**Also:** dropped a two-element tuple whose second element was discarded at every
+call site, and a `table_name` binding that restated its own input to launder a
+lifetime.
+
+### Deliberately not changed
+
+**The CLI defaults `--db` to `riposte.db` in the working directory,** not
+`%APPDATA%\Riposte\riposte.db` as `03-DATA-MODEL.md` §1 specifies. `riposte` is
+a development driver, and a dev tool that writes into the user's real
+application data is worse than one that does not. The app proper owns that path
+from M1.7.
+
+**A stale embedding model leaves detection blind rather than re-embedding on
+the fly.** The CLI warns loudly and the rail still works — Layer 0 has no
+dependency on any of this, which is the architectural bet. The *application*
+should embed at startup rather than warn; that belongs to whichever milestone
+owns app startup, not to a dev CLI.

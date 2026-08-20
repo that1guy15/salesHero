@@ -84,6 +84,10 @@ pub struct Objection {
     pub triggers: Vec<String>,
     pub negative_triggers: Vec<String>,
     pub doc_refs: Vec<String>,
+    /// After this many fires within one call, the pipeline serves the
+    /// playbook's `comply` card instead of this objection's rebuttal.
+    /// `None` for most objections. See `docs/DECISIONS.md` D8.
+    pub escalate_after_repeats: Option<u32>,
 }
 
 impl Objection {
@@ -226,6 +230,7 @@ mod tests {
             triggers: vec![],
             negative_triggers: vec![],
             doc_refs: vec![],
+            escalate_after_repeats: None,
         }
     }
 
