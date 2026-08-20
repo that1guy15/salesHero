@@ -5,22 +5,43 @@
       "Bash(cargo build:*)",
       "Bash(cargo check:*)",
       "Bash(cargo test:*)",
+      "Bash(cargo nextest:*)",
       "Bash(cargo run -p riposte-cli:*)",
+      "Bash(cargo run -p riposte-evals:*)",
+      "Bash(cargo run -p riposte-replay:*)",
       "Bash(cargo fmt:*)",
       "Bash(cargo clippy:*)",
       "Bash(cargo tree:*)",
       "Bash(cargo bench:*)",
+      "Bash(cargo deny:*)",
       "Bash(git status:*)",
       "Bash(git diff:*)",
       "Bash(git log:*)",
       "Bash(git show:*)",
-      "Bash(./target/debug/riposte:*)"
+      "Bash(./target/debug/riposte:*)",
+      "Bash(sqlite3:*)",
+      "Bash(rg:*)"
     ],
     "deny": [
       "Read(./.env)",
       "Read(./.env.*)",
       "Read(./**/*.pem)",
-      "Read(./**/*.key)"
+      "Read(./**/*.key)",
+      "Read(./evals/fixtures/real/**)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CLAUDE_TOOL_INPUT\" | grep -q '\\.rs\"'; then cd \"$CLAUDE_PROJECT_DIR\" && cargo fmt --all 2>/dev/null; fi",
+            "timeout": 30
+          }
+        ]
+      }
     ]
   }
 }

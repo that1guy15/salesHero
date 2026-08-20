@@ -32,6 +32,28 @@ These are not preferences. Breaking one is a bug even if tests pass.
 
 ---
 
+## Skills
+
+Project-local skills in `.claude/skills/` encode the workflows below. Prefer them
+over improvising:
+
+| Skill | Use it for |
+|---|---|
+| `milestone` | Starting, continuing or closing any milestone |
+| `invariant-audit` | The seven invariants and the four required tests, before any merge |
+| `compliance-review` | Any diff touching detect, llm, store, the playbook format, or cards |
+| `gate-calibration` | M1.5, and any threshold or embedder question |
+| `playbook-lint` | Authoring or reviewing playbook content |
+| `insurance-domain` | What the end customer's job actually is |
+| `windows-verify` | The manual M1.7/M4/M6/M9 checklists on the Windows box |
+
+Subagents in `.claude/agents/`: `spec-auditor` (code-vs-docs drift) and
+`rust-reviewer` (realtime safety, compliance path, latency budget).
+
+Machine setup: `docs/DEV-SETUP.md`.
+
+---
+
 ## Working style
 
 **Platform code stays in one place.** `crates/audio` is the only crate permitted to contain `#[cfg(windows)]`. Everything else compiles and tests on Linux so CI is cheap. If you find yourself wanting a platform cfg elsewhere, the abstraction is wrong — fix the abstraction.
