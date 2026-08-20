@@ -161,14 +161,38 @@ objections:
     kind: comply            # forces allow_refine=false — see docs/06-COMPLIANCE.md
     rail_slot: 6
     threshold: 0.55         # deliberately low; a false positive here costs nothing
+    # Unlike every other entry, this list is enumerated exhaustively rather
+    # than left to the semantic gate. A removal request is a closed, legally
+    # recognised vocabulary — there are perhaps twenty ways to say it — and a
+    # false positive here costs nothing while a false negative is a TCPA
+    # violation. Calibration (docs/DECISIONS.md D16) measured 3 of 6 held-out
+    # removal requests missed with the original seven triggers.
     triggers:
       - "take me off your list"
+      - "take me off the list"
+      - "take my number off your list"
       - "put me on your do not call list"
-      - "stop calling me"
-      - "don't call here again"
-      - "remove me from your list"
+      - "add me to your do not call list"
       - "I'm on the do not call registry"
+      - "stop calling me"
+      - "stop calling this number"
+      - "stop contacting me"
       - "quit calling"
+      - "quit calling me"
+      - "don't call here again"
+      - "don't call me again"
+      - "do not call this number again"
+      - "never call me again"
+      - "don't contact me anymore"
+      - "don't contact me again"
+      - "remove me from your list"
+      - "remove me from your database"
+      - "I want off your list"
+      - "I want off whatever list I'm on"
+      - "lose my number"
+      - "delete my number"
+      - "no more calls"
+      - "I don't want any more calls"
     response: |
       STOP. Do not rebut. Do not offer anything else. Do not ask why.
       Confirm the removal, apologize briefly, end the call.

@@ -7,11 +7,47 @@
 use crate::embed::{cosine, normalize_tokens, Embedder};
 use riposte_core::{Objection, ObjectionKind, Speaker, Utterance};
 
-/// Weight applied to the best negative-trigger match. Subtracting rather than
-/// hard-excluding lets a strong positive still win, which matters because
-/// negative triggers are learned from user error and are noisier than
-/// authored ones.
+/// Weight applied to a negative trigger that out-competes every positive one.
+///
+/// Subtracting rather than hard-excluding lets a strong positive still win,
+/// which matters because negative triggers are learned from user error and are
+/// noisier than authored ones.
 const NEGATIVE_WEIGHT: f32 = 0.5;
+
+/// How much a negative trigger suppresses this objection.
+///
+/// `04-CONTRACTS.md` §4 specifies `positive − 0.5 × negative` on the raw
+/// negative score. Measured on the shipped playbook, that suppresses an
+/// objection's *own authored trigger*: "I didn't request a quote" scores 1.000
+/// against `obj_no_form`, but its near-identical negative trigger "yes I did
+/// request a quote" scores 0.786, giving 1.000 − 0.393 = 0.607 — under the 0.62
+/// threshold. A positive and a negative that differ only in polarity share
+/// almost every lexical feature, so the negative fires whenever the positive
+/// does.
+///
+/// A negative therefore only counts when it explains the utterance *better*
+/// than any positive one does — and when it does, it counts at full weight.
+/// The two cases the shipped playbook actually contains:
+///
+/// | utterance | positive | negative | verdict |
+/// |---|---|---|---|
+/// | "I didn't request a quote" (a trigger) | 1.000 | 0.786 | fires — positive wins |
+/// | "yes I did request a quote" (a negative trigger) | 0.786 | 1.000 | suppressed |
+///
+/// A margin-proportional penalty cannot separate these: the margin is 0.214
+/// either way, and only its *sign* says which reading is right.
+///
+/// This also makes the documented intent literally true — "subtracting rather
+/// than hard-excluding lets a strong positive still win" — where before, a
+/// negative trigger suppressed in proportion to its absolute score even when
+/// the positive beat it outright. See `docs/DECISIONS.md` D16.
+fn penalty(positive: f32, negative: f32) -> f32 {
+    if negative > positive {
+        NEGATIVE_WEIGHT * negative
+    } else {
+        0.0
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct GateHit {
@@ -213,7 +249,7 @@ impl DetectionGate {
             kind: e.kind,
             positive,
             negative,
-            score: positive - NEGATIVE_WEIGHT * negative,
+            score: positive - penalty(positive, negative),
             threshold: e.threshold,
             best_trigger: best_trigger.to_string(),
             matched_text: text.to_string(),
@@ -572,6 +608,64 @@ mod tests {
             s2 < s1,
             "negative trigger did not reduce score: {s1} -> {s2}"
         );
+    }
+
+    /// Found by the M1.5 calibration harness: `obj_no_form`'s own authored
+    /// trigger "I didn't request a quote" scored 1.000, and its near-identical
+    /// negative "yes I did request a quote" scored 0.786. Under
+    /// `positive - 0.5 * negative` that is 0.607, below the objection's own
+    /// 0.62 threshold — an objection suppressed by its own trigger.
+    #[test]
+    fn a_negative_does_not_suppress_a_stronger_positive() {
+        let e = HashEmbedder::new();
+        let gate = DetectionGate::build(
+            &[objection(
+                "obj_no_form",
+                "Never filled out a form",
+                ObjectionKind::Rebut,
+                &["I didn't request a quote", "I never filled out any form"],
+                &["yes I did request a quote", "I filled that out yesterday"],
+            )],
+            &e,
+        );
+        for phrase in ["I didn't request a quote", "I never filled out any form"] {
+            let s = &gate.score(phrase, &e)[0];
+            assert!(
+                s.is_hit(),
+                "{phrase:?} is an authored trigger and scored {:.3} < {:.2} \
+                 (positive {:.3}, negative {:.3})",
+                s.score,
+                s.threshold,
+                s.positive,
+                s.negative
+            );
+        }
+    }
+
+    /// The other side of the same boundary: when the negative genuinely is the
+    /// better reading, it must still suppress.
+    #[test]
+    fn a_negative_still_suppresses_when_it_outscores_the_positive() {
+        let e = HashEmbedder::new();
+        let gate = DetectionGate::build(
+            &[objection(
+                "obj_no_form",
+                "Never filled out a form",
+                ObjectionKind::Rebut,
+                &["I didn't request a quote", "I never filled out any form"],
+                &["yes I did request a quote", "I filled that out yesterday"],
+            )],
+            &e,
+        );
+        for phrase in ["yes I did request a quote", "I filled that out yesterday"] {
+            let s = &gate.score(phrase, &e)[0];
+            assert!(
+                !s.is_hit(),
+                "{phrase:?} affirms the opposite and scored {:.3} >= {:.2}",
+                s.score,
+                s.threshold
+            );
+        }
     }
 
     #[test]

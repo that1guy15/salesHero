@@ -1,0 +1,98 @@
+# Held-out probes for gate calibration.
+#
+# These are NOT the playbook's trigger phrases. Scoring a trigger against its
+# own objection measures nothing — a lexical embedder returns 1.000 by
+# construction — and M1's acceptance criteria do exactly that, which is why they
+# were never the real test.
+#
+# Every probe below is a paraphrase an actual prospect might say, deliberately
+# sharing little or no wording with the authored triggers. That is what measures
+# recall. `expect: none` probes measure precision: ordinary call speech that
+# must not fire anything.
+#
+# Four of these are the probes docs/PROJECT-STATUS.md §3 used to characterise
+# each embedder. They are marked, so the numbers there stay comparable.
+
+probes:
+
+  # ── obj_no_form ──────────────────────────────────────────────────────────
+  - { text: "I didn't put my information in anywhere", expect: obj_no_form }
+  - { text: "nobody here requested any quotes", expect: obj_no_form }
+  - { text: "I don't recall ever submitting anything online", expect: obj_no_form }   # §3.2 probe
+  - { text: "that wasn't me, I haven't been shopping for insurance", expect: obj_no_form }
+
+  # ── obj_not_interested ───────────────────────────────────────────────────
+  - { text: "we're all set thanks", expect: obj_not_interested }                      # §3.1 and §3.2 probe
+  - { text: "yeah I'm gonna pass", expect: obj_not_interested }
+  - { text: "no I'm good", expect: obj_not_interested }
+  - { text: "I don't need anything right now", expect: obj_not_interested }
+
+  # ── obj_already_covered ──────────────────────────────────────────────────
+  - { text: "I've got a guy who handles that already", expect: obj_already_covered }  # §3.2 probe
+  - { text: "we've been with the same company forever", expect: obj_already_covered }
+  - { text: "my policy is through my employer", expect: obj_already_covered }
+  - { text: "someone already takes care of that for us", expect: obj_already_covered }
+
+  # ── obj_bad_time ─────────────────────────────────────────────────────────
+  - { text: "catch me another time", expect: obj_bad_time }                           # §3.2 probe
+  - { text: "I'm walking into a meeting", expect: obj_bad_time }
+  - { text: "this isn't really a great moment", expect: obj_bad_time }
+  - { text: "I've got my hands full right now", expect: obj_bad_time }
+
+  # ── obj_who_is_this ──────────────────────────────────────────────────────
+  - { text: "hold on, who am I speaking with", expect: obj_who_is_this }
+  - { text: "what company are you calling from", expect: obj_who_is_this }
+  - { text: "how'd you get ahold of my number", expect: obj_who_is_this }
+  - { text: "is this one of those spam calls", expect: obj_who_is_this }
+
+  # ── obj_dnc — a false negative here is a TCPA problem ────────────────────
+  - { text: "please don't contact me anymore", expect: obj_dnc }
+  - { text: "I want off whatever list I'm on", expect: obj_dnc }
+  - { text: "do not call this number again", expect: obj_dnc }
+  - { text: "lose my number", expect: obj_dnc }
+  # Stated alongside another objection. See docs/DECISIONS.md D11 — these were
+  # served rebuttals before comply won the gate.
+  - { text: "I already have insurance, quit calling", expect: obj_dnc }
+  - { text: "I'm not looking for anything, quit calling", expect: obj_dnc }
+
+  # ── below the fold ───────────────────────────────────────────────────────
+  - { text: "ballpark it for me", expect: obj_price_first }
+  - { text: "what am I looking at price wise", expect: obj_price_first }
+  - { text: "how much are we talking", expect: obj_price_first }
+
+  - { text: "shoot me an email", expect: obj_send_info }
+  - { text: "can you put that in writing", expect: obj_send_info }
+  - { text: "mail me something to look over", expect: obj_send_info }
+
+  - { text: "I'd have to run it by my wife first", expect: obj_spouse }
+  - { text: "my husband handles all that", expect: obj_spouse }
+  - { text: "we decide these things as a couple", expect: obj_spouse }
+
+  - { text: "that's way out of my budget", expect: obj_too_expensive }
+  - { text: "I'm paying a lot less than that now", expect: obj_too_expensive }
+  - { text: "no way I can swing that", expect: obj_too_expensive }
+
+  # ── Far negatives: ordinary call speech that must fire nothing ───────────
+  #
+  # A dialer session is mostly this. The gate rejecting >95% of speech for free
+  # is what makes local-only mode pleasant rather than a compromise
+  # (docs/02-ARCHITECTURE.md §1).
+  - { text: "hello", expect: none }
+  - { text: "yeah this is him", expect: none }
+  - { text: "hold on let me grab a pen", expect: none }
+  - { text: "can you say that again", expect: none }
+  - { text: "sure go ahead", expect: none }
+  - { text: "what was your name again", expect: none }
+  - { text: "uh huh okay", expect: none }
+  - { text: "I'm listening", expect: none }
+  - { text: "let me get my policy number", expect: none }
+  - { text: "we just bought the house last spring", expect: none }
+  - { text: "I've got two cars and a truck", expect: none }
+  - { text: "my daughter just started driving", expect: none }
+  - { text: "the deductible is a thousand I think", expect: none }
+  # Voicemail. docs/07-BUILD-PLAN.md M2 requires zero detections on these.
+  - { text: "you've reached the voicemail of Dave Miller", expect: none }
+  - { text: "please leave a message after the tone", expect: none }
+  # A wrong number. There is no disqualify entry in the shipped playbook, so
+  # nothing should fire — see the open Disqualify question in PROJECT-STATUS §4.2.
+  - { text: "I think you want my brother, he doesn't live here", expect: none }

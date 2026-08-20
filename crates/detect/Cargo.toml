@@ -11,6 +11,10 @@ riposte-store = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
+[[bench]]
+name = "gate"
+harness = false
+
 [features]
 default = []
 # Pulls fastembed + ort (ONNX Runtime). Heavy, downloads model weights on

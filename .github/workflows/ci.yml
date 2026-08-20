@@ -84,6 +84,14 @@ jobs:
       # served a rebuttal. See docs/DECISIONS.md D11 — this regressed once and
       # the failure is silent, so it is asserted end to end and not only in a
       # unit test.
+      # M1.5. Locks in the two M1 acceptance criteria that had no test, plus
+      # the compliance gate: every removal request in the held-out probe set is
+      # caught. Calibration measured 3 of 6 missed before the DNC vocabulary
+      # was enumerated (docs/DECISIONS.md D16) — a silent regression there is a
+      # TCPA exposure, not a quality dip.
+      - name: Gate — M1 acceptance criteria and the compliance floor
+        run: cargo run -q -p riposte-evals -- check
+
       - name: Compliance — a mixed utterance selects the comply card
         run: |
           out=$(cargo run -q -p riposte-cli -- detect --text "I already have insurance, quit calling")

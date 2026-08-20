@@ -446,3 +446,103 @@ the fly.** The CLI warns loudly and the rail still works — Layer 0 has no
 dependency on any of this, which is the architectural bet. The *application*
 should embed at startup rather than warn; that belongs to whichever milestone
 owns app startup, not to a dev CLI.
+
+## D16 — M1.5 calibration: what the gate actually does
+
+`PROJECT-STATUS.md` §3.1 raised, from a single probe, that the shipped
+thresholds might be miscalibrated for BGE-small, and §5 made measuring it the
+step before anything else. This is that measurement. **The answer is worse than
+§3.1 suspected, and it changes what v1 should be.**
+
+Harness: `evals/`, `riposte-evals calibrate|check`. 54 held-out probes —
+paraphrases a prospect might actually say, deliberately sharing little wording
+with any authored trigger, plus 17 far-negatives of ordinary call speech.
+
+Scoring a trigger against its own objection measures nothing: a lexical embedder
+returns 1.000 by construction. M1's acceptance criteria do exactly that, which
+is why passing them never meant the gate worked.
+
+### Finding 1 — the shipped thresholds sit inside BGE's noise floor
+
+Raw BGE-small cosine against **unrelated** speech: min 0.611, p50 0.717,
+p90 0.800, max 0.809. The authored thresholds are 0.55–0.66.
+
+**16 of 16 far-negative utterances (100%) clear an authored threshold.** With
+BGE wired up as shipped, "hello" fires an objection card. §3.1's single
+observation was not an outlier; it was the normal case.
+
+All figures below rescale the semantic arm to `(raw − floor)/(1 − floor)` with
+the floor measured at 0.720 from the far-negatives. That is a measurement device
+so the arms are comparable — not a fix.
+
+### Finding 2 — no arm comes close to the recall target
+
+Held-out recall against `01-PRD.md` §7's target of **> 0.60**:
+
+| arm | recall | precision |
+|---|---|---|
+| lexical (`hash-lexical-v2`) | **0.16** | 1.00 |
+| BGE-small, floor-corrected | **0.13** | 1.00 |
+| hybrid (max of both) | **0.13** | 1.00 |
+
+Precision is perfect on all three because nothing fires. Separation, p10 of
+should-match minus p90 of should-not: lexical **−0.248**, BGE **−0.285**, hybrid
+**−0.205**. All negative — the distributions overlap, so **no threshold exists**
+that separates them. Per-objection, only `obj_dnc` separates, and only because
+it matches lexically (D11) rather than through the embedding gate.
+
+The hybrid helps — it is the best of the three on separation, and it lifts
+individual probes ("that wasn't me…" 0.000 → 0.077, "we're all set thanks"
+0.370 → 0.409) — but not nearly enough. **It is not the fix, and the cheap
+options in §3.1 will not close a gap this size either.**
+
+### What follows
+
+The rail-first sequencing was already agreed; this is the evidence for it.
+Layer 0 needs none of the above and is unaffected. What must not happen is M2
+being built on this gate, or the PRD's detection targets being carried forward
+as if they were achievable — on this evidence they are not, with either
+embedder, at any threshold.
+
+The realistic options, none cheap: a cross-encoder rerank on gate hits; a much
+larger authored trigger vocabulary per objection; fine-tuning an embedder on
+real call transcripts; or accepting that detection is a Layer-2 concern and
+letting the LLM classify directly. That is a product decision, and it should be
+made with these numbers in hand rather than after M2.
+
+**Thresholds are therefore unchanged.** Proposing values computed from
+overlapping distributions would dress up noise as calibration. The harness
+refuses to propose when the gap is under 0.05, and refuses entirely for
+compliance entries — `obj_dnc`'s 0.55 is policy, not a tuning parameter.
+
+### Fixed along the way
+
+**A negative trigger suppressed its objection's own authored trigger.**
+`04-CONTRACTS.md` §4 specifies `positive − 0.5 × negative`. On the shipped
+playbook, "I didn't request a quote" scores 1.000 against `obj_no_form` while
+its near-twin negative "yes I did request a quote" scores 0.786, giving 0.607 —
+below the 0.62 threshold. A positive and a negative differing only in polarity
+share nearly every lexical feature.
+
+Changed so a negative counts only when it *outscores* every positive, and then
+at full weight. The margin is 0.214 in both directions; only its sign says which
+reading is right, so a margin-proportional penalty cannot separate them. This
+also makes the documented intent — "a strong positive still wins" — literally
+true. Tests: `a_negative_does_not_suppress_a_stronger_positive`,
+`a_negative_still_suppresses_when_it_outscores_the_positive`.
+
+**3 of 6 held-out removal requests were missed.** "please don't contact me
+anymore", "I want off whatever list I'm on", "lose my number" — all genuine DNC
+requests, none caught. Given Finding 2, the semantic gate cannot be relied on
+here at all.
+
+`obj_dnc`'s triggers are now enumerated exhaustively (7 → 25). Unlike every
+other entry this is the correct approach: a removal request is a closed, legally
+recognised vocabulary of perhaps twenty formulations, a false positive costs
+nothing, and a false negative is a TCPA violation. Now 6/6, with no new
+cross-match violations. `riposte-evals check` runs in CI and fails the build on
+a regression.
+
+**M1's last open acceptance criterion is closed.** `crates/detect/benches/gate.rs`:
+0.286 ms p50 at 100 objections against a 10 ms budget — 35× headroom. Evaluation
+only; index construction moved to import time in D12.
