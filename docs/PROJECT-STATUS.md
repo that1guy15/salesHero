@@ -130,9 +130,43 @@ The options, none cheap:
 3. Fine-tuning an embedder on real call transcripts
 4. Accepting that detection belongs in Layer 2 and letting the LLM classify
 
-Make that call with D16's numbers in hand. Meanwhile **M1.7 — the rail-only
-overlay — is unblocked and unaffected**, and it measures the PRD's headline
-metric, which needs none of this.
+Make that call with D16's numbers in hand.
+
+### M1.7 is built — the overlay exists and ships Layer 0
+
+`apps/desktop`, Tauri v2 + Svelte. **No audio, no ASR, no LLM, no detection** —
+the rail renders from the playbook and nothing else, which is what makes
+`01-PRD.md` §7's headline metric measurable now rather than after M5.
+
+- Rail per `05-UX-SPEC.md` §3: six slots in fixed order, hotkey badges, kind
+  colours, one card expanded at a time, `Esc` to collapse.
+- **Hotkeys are `Ctrl+Alt+1`–`6`** (**D18**). Bare digits registered globally
+  would capture them system-wide and the agent could not type a `3` into their
+  dialer. `PROJECT-STATUS.md` §4.2 flagged this as blocking overlay work; it is
+  resolved.
+- Inline card editing, reachable from the card itself — `01-PRD.md` §2 says the
+  target user will not author YAML but will retype a response in their own words.
+- **Practice mode**, and practice presses are deliberately *not* counted.
+  Counting drills would inflate the one number that tells us whether the product
+  works.
+- Comply cards take the whole panel, hide the rail, carry no feedback buttons,
+  and state plainly that Riposte does not maintain a DNC list.
+- Screen-capture exclusion, defaulted on, re-asserted on every show — Tauri
+  drops both that and always-on-top across a hide/show cycle.
+- First-run consent, not skippable, not defaulted checked.
+- Platform code confined to one module (**D17**).
+
+**Required test `rail_renders_with_all_engines_disabled` is implemented and
+passing**, along with five more in `apps/desktop/tests/invariants.rs`. Three of
+the four named invariant tests now exist; `local_only_mode_makes_no_network_calls`
+and `redaction_applied_before_egress` belong to M3.
+
+Verified on macOS: builds, launches, bootstraps its store at the platform
+app-data path, and imports the bundled playbook with zero setup.
+
+**Everything that matters next is Windows-only** — global hotkeys against a live
+Ricochet360 session, capture exclusion against Zoom/OBS/Snipping Tool, and a
+4-hour dialing session. The checklist is `docs/WINDOWS-TESTING.md`.
 
 ### Sequencing changed
 

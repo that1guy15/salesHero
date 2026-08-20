@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Riposte",
+  "version": "0.1.0",
+  "identifier": "com.riposte.overlay",
+  "build": {
+    "beforeDevCommand": "npm --prefix ui run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm --prefix ui run build",
+    "frontendDist": "ui/dist"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "label": "overlay",
+        "title": "Riposte",
+        "width": 380,
+        "height": 620,
+        "minWidth": 340,
+        "minHeight": 320,
+        "resizable": true,
+        "decorations": false,
+        "transparent": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "center": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis", "dmg"],
+    "resources": ["../../playbooks/insurance-cold-call.yaml"],
+    "icon": ["icons/icon.png"],
+    "shortDescription": "Real-time objection coaching for outbound sales agents",
+    "longDescription": "The Quick Response Rail keeps an insurance agent's top objections one keystroke away during live calls. Works with no model, no network, and no audio."
+  }
+}

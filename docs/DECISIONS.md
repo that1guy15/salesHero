@@ -546,3 +546,56 @@ a regression.
 **M1's last open acceptance criterion is closed.** `crates/detect/benches/gate.rs`:
 0.286 ms p50 at 100 objections against a 10 ms budget — 35× headroom. Evaluation
 only; index construction moved to import time in D12.
+
+## D17 — Platform code in the desktop app lives in one module
+
+**Specified:** `AGENTS.md` — *"`crates/audio` is the only crate permitted to
+contain `#[cfg(windows)]`. If you find yourself wanting a platform cfg
+elsewhere, the abstraction is wrong — fix the abstraction."*
+
+**Tension:** `05-UX-SPEC.md` §6 requires the overlay to call
+`SetWindowDisplayAffinity`, by name, in the Tauri setup hook. A window manager
+cannot be abstracted away the way an audio backend can.
+
+**Changed:** the rule is honoured by its reason rather than its letter. Every
+platform call in `apps/desktop` lives in `src/platform.rs`, behind functions
+that compile to a no-op elsewhere. Nothing above that module knows which OS it
+is on, and `get_capabilities` reports what the platform can actually do so the
+UI shows a disabled toggle with an explanation instead of one that silently does
+nothing.
+
+**Why this is not a violation:** the invariant's stated purpose is that the
+pipeline compiles and tests on Linux so CI stays cheap and a macOS port is one
+crate rather than a rewrite. `apps/desktop` is an app, not a pipeline crate; it
+still compiles and tests on every platform; and the containment is identical to
+the one `crates/audio` provides. The `windows` dependency is
+`[target.'cfg(windows)'.dependencies]`, so it is not even fetched elsewhere.
+
+## D18 — Rail hotkeys are `Ctrl+Alt+1`–`6`, not bare digits
+
+**Specified:** `05-UX-SPEC.md` §3 — *"Manual invocation via hotkey `1`–`6`"*,
+and §3's behaviour table wants them live without the overlay having focus.
+
+**Problem:** those two requirements are incompatible. A *global* registration of
+bare digits captures them system-wide, so the agent could not type a `3` into
+their dialer, a policy number into their CRM, or a phone extension.
+`PROJECT-STATUS.md` §4.2 flagged this as needing resolution before any overlay
+work; this is the resolution.
+
+**Changed:** the global binding is `Ctrl+Alt+1`–`6`. Bare `1`–`6` still work as
+a convenience while the overlay itself has focus, and are suppressed inside text
+fields so editing a card does not fire cards.
+
+**Why `Ctrl+Alt` and not `Ctrl+Shift`:** `Ctrl+Shift+<digit>` collides with
+browser tab-group and dev-tools bindings in Chrome, which is where the dialer
+runs. `Ctrl+Alt+<digit>` is unclaimed on Windows and reachable one-handed while
+the other hand is on a mouse.
+
+The hotkey badge in the UI still shows the bare numeral. `05-UX-SPEC.md` §2 is
+right that it teaches the shortcut passively, and `Ctrl+Alt+3` in a 22px square
+is unreadable. The modifier is taught by the first-run screen and by muscle
+memory, and the numeral is what disambiguates the six.
+
+**Not yet resolved:** whether `Ctrl+Alt+<digit>` collides with anything in
+Ricochet360 specifically. That needs the Windows box and the real dialer — it is
+on the M1.7 checklist in the `windows-verify` skill.

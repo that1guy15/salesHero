@@ -6,6 +6,7 @@ members = [
     "crates/playbook",
     "crates/detect",
     "apps/cli",
+    "apps/desktop",
     "evals",
 ]
 

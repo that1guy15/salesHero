@@ -57,6 +57,8 @@ Read in order. Each assumes the prior ones.
 | 5 | [`docs/05-UX-SPEC.md`](docs/05-UX-SPEC.md) | Overlay layout, states, hotkeys, visual system |
 | 6 | [`docs/06-COMPLIANCE.md`](docs/06-COMPLIANCE.md) | Consent, DNC handling, redaction — read before M2 |
 | 7 | [`docs/07-BUILD-PLAN.md`](docs/07-BUILD-PLAN.md) | Milestones as verifiable tasks |
+| — | [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md) | Setting up and testing the overlay on Windows |
+| — | [`docs/DEV-SETUP.md`](docs/DEV-SETUP.md) | What a development machine needs, and why |
 | — | [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) | **Start here.** What is built, what is not, open concerns |
 | — | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Where the implementation deviates from the specs, and why |
 
