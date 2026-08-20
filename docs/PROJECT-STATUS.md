@@ -88,11 +88,51 @@ All 21 findings are closed. Beyond the compliance work above:
 `-D warnings` on both the default and `onnx` feature sets, and every M0/M1
 runnable criterion produces its specified output.
 
-### Next
+### M1.5 is complete, and §3.1 below is answered
 
-**M1.5 — gate calibration.** §3.1 below is unchanged and still the blocker on
-M2. Nothing in M1.1 touched the thresholds; they remain uncalibrated, and the
-default embedder remains a CI fixture rather than a shippable gate.
+**The answer is worse than §3.1 suspected.** Full detail in `DECISIONS.md` D16;
+the two numbers that matter:
+
+- **100% of far-negative utterances clear an authored threshold with raw
+  BGE-small.** Its noise floor measures p50 0.717 / p90 0.800 against thresholds
+  of 0.55–0.66. Wired up as shipped, "hello" fires an objection card. §3.1's
+  single observation was the normal case, not an outlier.
+- **No arm reaches the recall target.** Against `01-PRD.md` §7's > 0.60, on 38
+  held-out paraphrases: lexical **0.16**, BGE **0.13**, hybrid **0.13**.
+  Separation is negative for all three, so **no threshold exists** that
+  separates should-match from should-not. Only `obj_dnc` separates, and only
+  because it matches lexically (D11) rather than through the gate.
+
+The hybrid is the best of the three and still nowhere near. The cheap options in
+§3.1 will not close a gap this size.
+
+Layer 0 is unaffected — it depends on none of this, which is the architectural
+bet paying off. What must not happen is M2 being built on this gate, or the
+PRD's detection targets being carried forward as achievable.
+
+**Thresholds are unchanged**, deliberately: proposing values from overlapping
+distributions would dress up noise as calibration.
+
+Also closed: a negative trigger was suppressing its own objection's authored
+trigger; `obj_dnc`'s vocabulary was enumerated exhaustively after 3 of 6
+held-out removal requests were missed; and M1's benchmark criterion is met at
+0.286 ms p50 for 100 objections against a 10 ms budget.
+
+`riposte-evals check` runs in CI and fails the build if any of it regresses.
+
+### Next — a product decision, not an engineering one
+
+Detection does not work yet, and no amount of threshold tuning will change that.
+The options, none cheap:
+
+1. A cross-encoder rerank on gate hits
+2. A much larger authored trigger vocabulary per objection
+3. Fine-tuning an embedder on real call transcripts
+4. Accepting that detection belongs in Layer 2 and letting the LLM classify
+
+Make that call with D16's numbers in hand. Meanwhile **M1.7 — the rail-only
+overlay — is unblocked and unaffected**, and it measures the PRD's headline
+metric, which needs none of this.
 
 ### Sequencing changed
 

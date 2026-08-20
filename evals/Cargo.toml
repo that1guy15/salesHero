@@ -1,0 +1,23 @@
+[package]
+name = "riposte-evals"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "riposte-evals"
+path = "src/main.rs"
+
+[dependencies]
+riposte-core = { workspace = true }
+riposte-detect = { workspace = true }
+riposte-playbook = { workspace = true }
+anyhow = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+serde = { workspace = true }
+serde_yaml = "0.9"
+
+[features]
+default = []
+onnx = ["riposte-detect/onnx"]

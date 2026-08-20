@@ -2177,6 +2177,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "riposte-evals"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "riposte-core",
+ "riposte-detect",
+ "riposte-playbook",
+ "serde",
+ "serde_yaml",
+]
+
+[[package]]
 name = "riposte-playbook"
 version = "0.1.0"
 dependencies = [
