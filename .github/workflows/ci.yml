@@ -41,6 +41,25 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: cargo check -p riposte-detect --features onnx
 
+      # Tauri needs system webkit headers to build on Linux. Worth the ~30s:
+      # it keeps `rail_renders_with_all_engines_disabled` — AGENTS.md invariant
+      # 3 — running on both platforms rather than Windows only.
+      - name: Tauri system dependencies (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libxdo-dev
+
+      # The overlay's frontend must exist before the Rust side can embed it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the overlay frontend
+        run: |
+          npm --prefix apps/desktop/ui ci
+          npm --prefix apps/desktop/ui run build
+
       - name: Test
         run: cargo test --workspace
 
@@ -58,7 +77,8 @@ jobs:
           # present reads as missing.
           list=$(cargo test --workspace -- --list 2>/dev/null || true)
           missing=0
-          for t in comply_objections_never_reach_llm comply_wins_a_mixed_utterance; do
+          for t in comply_objections_never_reach_llm comply_wins_a_mixed_utterance \
+                   rail_renders_with_all_engines_disabled; do
             case "$list" in
               *"$t"*) ;;
               *) echo "::error::required invariant test missing: $t"; missing=1 ;;
