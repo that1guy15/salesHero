@@ -8,7 +8,7 @@
 //!   It exists so the gate runs on any machine and so CI is hermetic and
 //!   reproducible, which the replay harness depends on.
 //!
-//! - [`OnnxEmbedder`] — BGE-small-en-v1.5 via `fastembed`, 384-dim, the real
+//! - `OnnxEmbedder` — BGE-small-en-v1.5 via `fastembed`, 384-dim, the real
 //!   semantic gate described in `docs/02-ARCHITECTURE.md` §7. Behind the
 //!   `onnx` feature because it pulls ONNX Runtime and downloads weights.
 //!

@@ -12,7 +12,10 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.82"
+# The dependency graph's own floor (darling, plist, time all declare 1.88), and
+# `as_chunks` in crates/store needs it too. The previous value of 1.82 was
+# aspirational — nothing enforced it and transitive deps had already moved past.
+rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/that1guy15/salesHero"
 

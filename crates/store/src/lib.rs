@@ -783,8 +783,14 @@ pub fn f32_to_blob(v: &[f32]) -> Vec<u8> {
 }
 
 pub fn blob_to_f32(b: &[u8]) -> Vec<f32> {
-    b.chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+    // `as_chunks` rather than `chunks_exact`: it hands back fixed-size arrays,
+    // so there is no per-element indexing for the compiler to bounds-check.
+    // Stable since 1.88, which is this workspace's MSRV.
+    b.as_chunks::<4>()
+        .0
+        .iter()
+        .copied()
+        .map(f32::from_le_bytes)
         .collect()
 }
 

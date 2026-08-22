@@ -153,14 +153,14 @@ impl DetectionGate {
     /// embedded once at import rather than on every evaluation.
     ///
     /// `DetectionGate::build` re-embeds every trigger phrase each time it is
-    /// called. That is free with [`HashEmbedder`] but costs seconds with
+    /// called. That is free with [`crate::embed::HashEmbedder`] but costs seconds with
     /// BGE-small, which made the live pipeline impossible — `M1` of
     /// `docs/07-BUILD-PLAN.md` specifies embedding "at playbook save time".
     ///
     /// Phrases with no stored vector for `model_id` are skipped rather than
     /// embedded on the fly: a partially embedded playbook is a bug in the
     /// import path, and silently papering over it would hide the seconds it
-    /// costs. Callers run [`missing_vectors`] first.
+    /// costs. Callers run [`DetectionGate::missing_vectors`] first.
     pub fn from_vectors(
         objections: &[Objection],
         vectors: &[riposte_store::TriggerVector],
