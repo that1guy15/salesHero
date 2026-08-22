@@ -52,12 +52,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Collect once, then match in-shell. `cargo ... | grep -q` is a trap
+          # under `pipefail`: grep -q exits on the first match, cargo dies of
+          # SIGPIPE, and the pipeline reports failure — so a test that is
+          # present reads as missing.
+          list=$(cargo test --workspace -- --list 2>/dev/null || true)
           missing=0
           for t in comply_objections_never_reach_llm comply_wins_a_mixed_utterance; do
-            if ! cargo test --workspace -- --list 2>/dev/null | grep -q "$t"; then
-              echo "::error::required invariant test missing: $t"
-              missing=1
-            fi
+            case "$list" in
+              *"$t"*) ;;
+              *) echo "::error::required invariant test missing: $t"; missing=1 ;;
+            esac
           done
           exit $missing
 
