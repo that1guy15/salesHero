@@ -36,7 +36,7 @@
     "active": true,
     "targets": ["msi", "nsis", "dmg"],
     "resources": ["../../playbooks/insurance-cold-call.yaml"],
-    "icon": ["icons/icon.png"],
+    "icon": ["icons/icon.png", "icons/icon.ico"],
     "shortDescription": "Real-time objection coaching for outbound sales agents",
     "longDescription": "The Quick Response Rail keeps an insurance agent's top objections one keystroke away during live calls. Works with no model, no network, and no audio."
   }
