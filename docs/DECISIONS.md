@@ -599,3 +599,63 @@ memory, and the numeral is what disambiguates the six.
 **Not yet resolved:** whether `Ctrl+Alt+<digit>` collides with anything in
 Ricochet360 specifically. That needs the Windows box and the real dialer — it is
 on the M1.7 checklist in the `windows-verify` skill.
+
+## D19 — Delivery goes through a pull request, and `main` is protected
+
+**Specified:** `AGENTS.md` said *"One milestone per branch. Do not merge a
+milestone whose runnable output criterion is unmet."* It never said what merging
+involved.
+
+**Found:** three branches pushed, zero pull requests, `main` unprotected and its
+last CI run red. Work was being treated as finished when the code worked. The
+documents described engineering standards in detail and said nothing about
+delivery, so delivery is what got dropped.
+
+**Changed:** nothing reaches `main` except through a pull request that passed
+`required-ci` — including owner-authored work. `AGENTS.md` opens with an
+authority hierarchy and a "Delivery is not optional" section; `CONTRIBUTING.md`
+carries the loop and the pre-PR checklist; `GOVERNANCE.md` carries the
+solo-maintainer rule; the `ship` skill carries the procedure.
+
+**Why the solo-maintainer rule allows self-merge:** required human approval is
+zero because self-approval is impossible on GitHub, and a rule that cannot be
+satisfied gets bypassed — which is worse than one honestly scoped. Pull request,
+green `required-ci`, and recorded review evidence all still apply. A second
+maintainer turns required CODEOWNER approval on.
+
+## D20 — CI is many leaves behind one aggregate gate
+
+**Changed:** thirteen leaf jobs and a single `required-ci` that branch protection
+points at.
+
+**Why an aggregate:** adding a check would otherwise mean editing the protection
+rule, which is a setting rather than a reviewed file, so it drifts. More
+importantly, `required-ci` inspects each leaf result explicitly rather than
+relying on `needs` alone — **GitHub treats a skipped required check as passing**,
+so a job that silently stops running still shows green. The one deliberate skip
+is `dco` outside a pull request, where there is nothing to inspect.
+
+**Why these leaves:** each closes something that had already gone wrong or was
+unverified — the MSRV was an unenforced promise, the ONNX gate had rotted to a
+fatal warning because CI never compiled that feature, both M0 and M1 were
+reported complete with six acceptance criteria open, and the compliance
+selection defect (D11) is silent when it regresses. `no-call-audio` exists
+because `.gitignore` should not be the only thing standing between this public
+repository and a criminal exposure in a two-party-consent state.
+
+## D21 — `unmaintained` advisories are scoped to direct dependencies
+
+**Specified:** not addressed.
+
+**Changed:** `deny.toml` sets `unmaintained = "workspace"`. Vulnerabilities and
+yanked crates fail unconditionally and that is not configurable here.
+
+**Why:** scoped to everything, the gate reports 16 findings. All are transitive,
+none is a vulnerability, ten are Tauri's GTK3 Linux backend — which this product
+does not ship, since it targets Windows, and for which no upgrade exists. A gate
+that fires 16 times on things nobody can fix is a gate people learn to ignore,
+and the next real advisory arrives into that habit. Scoping it to what we
+directly control keeps it actionable.
+
+`cpal` is banned outright: `02-ARCHITECTURE.md` §4 settles that decision, and a
+reappearance in the graph means someone reopened it without saying so.

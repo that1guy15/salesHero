@@ -19,6 +19,10 @@ edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/that1guy15/salesHero"
+# Nothing here is published to crates.io. These are workspace-internal crates
+# and an accidental `cargo publish` would put an unfinished compliance-critical
+# gate on a public registry.
+publish = false
 
 [workspace.dependencies]
 riposte-core = { path = "crates/core" }

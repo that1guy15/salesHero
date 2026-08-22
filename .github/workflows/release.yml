@@ -1,0 +1,116 @@
+name: Release
+
+# Tag-driven. Builds the Windows installer and a macOS bundle, publishes a
+# **draft** release, and stops there — a human decides whether it ships.
+#
+# `docs/06-COMPLIANCE.md` and `07-BUILD-PLAN.md` M9 both require a code-signed
+# MSI for the test-user release. Signing is deliberately not wired here yet:
+# the certificate has a multi-week procurement lead time and a workflow that
+# silently produces unsigned installers named like signed ones is worse than
+# one that says so.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build the artifacts without creating a release
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # A release must clear the same bar as a merge. Re-run rather than trusting
+  # that the tagged commit was green when it was a PR.
+  gate:
+    name: gate
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: build (${{ matrix.os }})
+    needs: [gate]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            bundles: msi,nsis
+          - os: macos-14
+            target: aarch64-apple-darwin
+            bundles: dmg
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { targets: "${{ matrix.target }}" }
+      - uses: Swatinem/rust-cache@9d47c6ad4b02e050fd481d890b2ea34778fd09d6 # v2.7.8
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with: { node-version: 20 }
+
+      - name: Overlay frontend
+        run: |
+          npm --prefix apps/desktop/ui ci
+          npm --prefix apps/desktop/ui run build
+
+      - name: Bundle
+        run: |
+          cargo install tauri-cli --version "^2" --locked
+          cargo tauri build --config apps/desktop/tauri.conf.json --bundles ${{ matrix.bundles }}
+
+      - name: Record that these artifacts are unsigned
+        shell: bash
+        run: |
+          echo "Artifacts from this run are NOT code signed." > UNSIGNED.txt
+          echo "Windows SmartScreen will warn on install. Do not distribute to" >> UNSIGNED.txt
+          echo "test agents until signing is wired — see 07-BUILD-PLAN.md M9." >> UNSIGNED.txt
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: riposte-${{ matrix.target }}
+          path: |
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.exe
+            target/release/bundle/**/*.dmg
+            UNSIGNED.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: draft-release
+    needs: [build]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with: { path: artifacts }
+      - uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        with:
+          draft: true
+          generate_release_notes: true
+          files: artifacts/**/*
+          body: |
+            **Draft — not for distribution until reviewed.**
+
+            These installers are **not code signed**. Windows SmartScreen will
+            warn on install. See `docs/07-BUILD-PLAN.md` M9.
+
+            Before publishing, confirm on a clean Windows 11 machine:
+
+            - [ ] Installs with no dev tools present
+            - [ ] Works with no API key configured
+            - [ ] Uninstall removes everything including `%APPDATA%`
+            - [ ] `docs/WINDOWS-TESTING.md` §4.8 passes — network off, audio off,
+                  no model on disk, and the rail still works

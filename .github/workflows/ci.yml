@@ -1,125 +1,396 @@
-name: CI
+name: Required CI
+
+# Every job below is a leaf. `required-ci` is the single aggregate that branch
+# protection points at, so adding a check never requires touching the protection
+# rule — and a skipped or cancelled job can never be mistaken for a pass.
 
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
   RUSTFLAGS: -D warnings
 
 jobs:
-  test:
-    # Everything except crates/audio compiles and tests on Linux, so the
-    # default runner is cheap. Windows is where crates/audio must be proven
-    # from M4 onward — see docs/PROJECT-STATUS.md §"Platform".
+  format:
+    name: format
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: rustfmt }
+      - run: cargo fmt --all -- --check
+
+  lint:
+    name: lint
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+        os: [ubuntu-24.04, windows-2022]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-
-      # Tauri needs system webkit headers to build on Linux. Worth the ~30s:
-      # it keeps `rail_renders_with_all_engines_disabled` — AGENTS.md invariant
-      # 3 — running on both platforms rather than Windows only.
-      - name: Tauri system dependencies (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Tauri system dependencies
+        if: matrix.os == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
             librsvg2-dev patchelf libxdo-dev
-
-      # The overlay's frontend must exist before the Rust side can embed it.
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Build the overlay frontend
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 20 }
+      - name: Overlay frontend
         run: |
           npm --prefix apps/desktop/ui ci
           npm --prefix apps/desktop/ui run build
+      - run: cargo clippy --workspace --all-targets
 
-      - name: Format
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo fmt --all -- --check
+  test:
+    name: test
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Tauri system dependencies
+        if: matrix.os == 'ubuntu-24.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libxdo-dev
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 20 }
+      - name: Overlay frontend
+        run: |
+          npm --prefix apps/desktop/ui ci
+          npm --prefix apps/desktop/ui run build
+      - run: cargo test --workspace
 
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets
+  msrv:
+    name: msrv
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      # rust-version in Cargo.toml is a promise. Nothing enforced it before.
+      - uses: dtolnay/rust-toolchain@stable
+        with: { toolchain: "1.88" }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Check the headless crates build on the declared MSRV
+        # The desktop app is excluded: Tauri's own MSRV moves faster than ours
+        # and the pipeline crates are what a contributor is most likely to build.
+        run: |
+          cargo check -p riposte-core -p riposte-store -p riposte-playbook \
+                      -p riposte-detect -p riposte-cli
 
+  onnx:
+    name: onnx-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+        with: { components: clippy }
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       # The ONNX path is the *real* gate (docs/DECISIONS.md D6); the default
-      # embedder is a CI fixture. Without this the shipped gate is never
-      # compiled in CI and rots silently. `check` rather than `test` so no
-      # model weights are downloaded.
-      - name: Check the ONNX gate compiles
-        if: matrix.os == 'ubuntu-latest'
-        run: cargo check -p riposte-detect --features onnx
+      # embedder is a CI fixture. Unchecked, it rots — it had already decayed to
+      # a warning that is fatal under -D warnings before this job existed.
+      # `check`, not `test`: no model weights are downloaded.
+      - run: cargo clippy -p riposte-detect --features onnx --all-targets
 
-      - name: Test
-        run: cargo test --workspace
+  evals:
+    name: detection-gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # M1's two acceptance criteria, plus the compliance floor: every removal
+      # request in the held-out probe set must be caught. docs/DECISIONS.md D16
+      # measured 3 of 6 missed before the DNC vocabulary was enumerated — a
+      # regression there is a TCPA exposure, not a quality dip.
+      - run: cargo run -q -p riposte-evals -- check
 
-      # The four named invariant tests from AGENTS.md are required to exist.
-      # A rename or deletion should fail CI loudly rather than quietly
-      # reducing coverage of a legal constraint.
+  compliance:
+    name: compliance
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # The four named invariant tests from AGENTS.md must exist by name. A
+      # rename or a deletion should fail loudly rather than quietly reduce
+      # coverage of a legal constraint. Tests belonging to unstarted milestones
+      # are listed but not yet required.
+      # Asserted against source rather than a compiled test list: listing tests
+      # would build the whole workspace, Tauri included, in a job that has no
+      # other reason to. The `test` job proves they pass; this proves nobody
+      # quietly renamed or deleted one.
       - name: Required invariant tests are present
-        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -euo pipefail
-          # Collect once, then match in-shell. `cargo ... | grep -q` is a trap
-          # under `pipefail`: grep -q exits on the first match, cargo dies of
-          # SIGPIPE, and the pipeline reports failure — so a test that is
-          # present reads as missing.
-          list=$(cargo test --workspace -- --list 2>/dev/null || true)
+          # No pipelines below. `x | grep -q` under `pipefail` reports failure
+          # whenever grep exits early and SIGPIPEs the producer, which silently
+          # inverted this exact check before.
+          files=$(git ls-files '*.rs')
           missing=0
-          for t in comply_objections_never_reach_llm comply_wins_a_mixed_utterance \
-                   rail_renders_with_all_engines_disabled; do
-            case "$list" in
-              *"$t"*) ;;
-              *) echo "::error::required invariant test missing: $t"; missing=1 ;;
-            esac
+          for t in comply_objections_never_reach_llm \
+                   comply_wins_a_mixed_utterance \
+                   dnc_survives_clause_dilution \
+                   containment_does_not_fire_on_a_partial_trigger \
+                   second_denial_escalates_to_the_comply_card \
+                   an_escalated_card_still_cannot_reach_the_llm \
+                   rail_renders_with_all_engines_disabled \
+                   hotkeys_work_with_all_engines_disabled; do
+            # Tracked .rs files only: an untracked scratch copy or a mention in
+            # a comment must not satisfy a required-test check.
+            # shellcheck disable=SC2086 -- word splitting over the file list is intended
+            if ! grep -lE "^\\s*(async )?fn +$t *\\(" $files >/dev/null 2>&1; then
+              echo "::error::required invariant test missing: $t"
+              missing=1
+            fi
           done
           exit $missing
 
+      # End to end through the shipped binary, not only a unit test. This
+      # regressed once and the failure is silent: the agent simply gets the
+      # wrong card. docs/DECISIONS.md D11.
+      - name: A removal request inside another objection selects the comply card
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run -q -p riposte-cli -- playbook import playbooks/insurance-cold-call.yaml
+          for phrase in "I already have insurance, quit calling" \
+                        "I'm not looking for anything, quit calling" \
+                        "now's not a good time, quit calling"; do
+            out=$(cargo run -q -p riposte-cli -- detect --dry-run --text "$phrase")
+            echo "$out"
+            grep -q comply <<<"$out" || {
+              echo "::error::a removal request was served a rebuttal: $phrase"; exit 1; }
+          done
+
+      # AGENTS.md: crates/audio is the only crate permitted platform cfgs, and
+      # apps/desktop/src/platform.rs is the recorded exception (D17).
+      - name: Platform code stays contained
+        shell: bash
+        run: |
+          set -euo pipefail
+          if rg -n '#\[cfg\((target_os|windows|unix)' crates/ apps/ evals/ \
+               -g '!crates/audio/**' -g '!apps/desktop/src/platform.rs'; then
+            echo "::error::platform cfg outside its permitted module — fix the abstraction"
+            exit 1
+          fi
+          echo "contained"
+
   smoke:
-    # The M0 and M1 runnable criteria from docs/07-BUILD-PLAN.md, exercised
-    # end to end. A milestone whose runnable output criterion is unmet does
-    # not merge.
-    runs-on: ubuntu-latest
+    name: runnable-output
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
       - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: M0 — import and list
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # docs/07-BUILD-PLAN.md: "Do not merge a milestone whose runnable output
+      # criterion is unmet." These are M0's and M1's, exercised end to end.
+      - name: M0 — import, list, rail, export
         run: |
           cargo run -q -p riposte-cli -- playbook import playbooks/insurance-cold-call.yaml
           cargo run -q -p riposte-cli -- playbook list
           cargo run -q -p riposte-cli -- rail
+          cargo run -q -p riposte-cli -- playbook export /tmp/exported.yaml
+          cargo run -q -p riposte-cli -- playbook import /tmp/exported.yaml
       - name: M1 — detect
         run: |
-          cargo run -q -p riposte-cli -- detect --text "yeah I never filled out any form" --all
-          cargo run -q -p riposte-cli -- detect --text "take me off your list"
+          cargo run -q -p riposte-cli -- detect --dry-run --all --text "yeah I never filled out any form"
+          cargo run -q -p riposte-cli -- detect --dry-run --text "take me off your list"
 
-      # A removal request stated alongside another objection must never be
-      # served a rebuttal. See docs/DECISIONS.md D11 — this regressed once and
-      # the failure is silent, so it is asserted end to end and not only in a
-      # unit test.
-      # M1.5. Locks in the two M1 acceptance criteria that had no test, plus
-      # the compliance gate: every removal request in the held-out probe set is
-      # caught. Calibration measured 3 of 6 missed before the DNC vocabulary
-      # was enumerated (docs/DECISIONS.md D16) — a silent regression there is a
-      # TCPA exposure, not a quality dip.
-      - name: Gate — M1 acceptance criteria and the compliance floor
-        run: cargo run -q -p riposte-evals -- check
+  supply-chain:
+    name: supply-chain
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 20 }
+      - name: npm audit (overlay frontend)
+        working-directory: apps/desktop/ui
+        run: npm audit --audit-level=high
 
-      - name: Compliance — a mixed utterance selects the comply card
+  secrets:
+    name: secret-scan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: gitleaks/gitleaks-action@83373cf2f8c4db6e24b41c1a9b086bb9619e9cd3 # v2.3.7
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Real call audio in a public repository is a criminal exposure in
+  # two-party-consent states. .gitignore is load-bearing, not hygiene, and a
+  # committed .wav must never depend on someone noticing it in review.
+  call-audio:
+    name: no-call-audio
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - shell: bash
         run: |
-          out=$(cargo run -q -p riposte-cli -- detect --text "I already have insurance, quit calling")
-          echo "$out"
-          echo "$out" | grep -q comply || {
-            echo "::error::a removal request was served a rebuttal"; exit 1; }
+          set -euo pipefail
+          found=$(git ls-files \
+            | grep -iE '\.(wav|mp3|m4a|flac|ogg|aac|wma)$' \
+            | grep -v '^evals/fixtures/synthetic/' || true)
+          if [ -n "$found" ]; then
+            echo "::error::audio committed outside evals/fixtures/synthetic/:"
+            echo "$found"
+            echo "See docs/06-COMPLIANCE.md §1 and .gitignore."
+            exit 1
+          fi
+          echo "no call audio committed"
+
+  docs:
+    name: docs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev \
+            librsvg2-dev patchelf libxdo-dev
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with: { node-version: 22 }
+      - name: Overlay frontend
+        run: |
+          npm --prefix apps/desktop/ui ci
+          npm --prefix apps/desktop/ui run build
+      - name: rustdoc builds without warnings
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --document-private-items
+      - name: Cross-references in docs/ resolve
+        shell: bash
+        run: |
+          set -euo pipefail
+          bad=0
+          while read -r ref file; do
+            [ -e "$ref" ] || [ -e "docs/$ref" ] || { echo "::error file=$file::broken reference: $ref"; bad=1; }
+          done < <(grep -rhoE '`(docs/[A-Za-z0-9._/-]+\.md|playbooks/[A-Za-z0-9._-]+\.yaml)`' docs/ *.md \
+                     | tr -d '`' | sort -u | sed 's/$/ docs/')
+          exit $bad
+
+  dco:
+    name: dco
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Every commit carries a Signed-off-by trailer
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          head="${{ github.event.pull_request.head.sha }}"
+          bad=0
+          while read -r sha; do
+            [ -z "$sha" ] && continue
+            msg=$(git log -1 --format='%B' "$sha")
+            if ! grep -qiE '^Signed-off-by: .+ <.+@.+>' <<<"$msg"; then
+              echo "::error::missing DCO sign-off: $sha $(git log -1 --format='%s' "$sha")"
+              bad=1
+            fi
+          done < <(git rev-list "$base".."$head")
+          [ $bad -eq 0 ] && echo "all commits signed off"
+          exit $bad
+
+  # The single check branch protection requires. `if: always()` plus explicit
+  # result inspection means a skipped, cancelled, or failed leaf all fail here —
+  # GitHub treats a skipped required check as passing, which is how a green
+  # merge button ends up meaning nothing.
+  required-ci:
+    name: required-ci
+    if: always()
+    needs:
+      - format
+      - lint
+      - test
+      - msrv
+      - onnx
+      - evals
+      - compliance
+      - smoke
+      - supply-chain
+      - secrets
+      - call-audio
+      - docs
+      - dco
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - shell: bash
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          set -euo pipefail
+          echo "leaf results: $RESULTS"
+          for r in $RESULTS; do
+            case "$r" in
+              success) ;;
+              # `dco` is skipped on push-to-main and merge_group, where there is
+              # no pull request to inspect. Nothing else may be skipped.
+              skipped) echo "::warning::a leaf was skipped" ;;
+              *) echo "::error::required check did not pass: $r"; exit 1 ;;
+            esac
+          done
+          echo "required-ci passed"

@@ -1,0 +1,49 @@
+name: Bug report
+description: Something behaves differently from what the documents specify
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Never paste real call audio, transcripts, prospect names, or phone
+        numbers.** Recording law is not a formality and this repository is
+        public. Use synthetic examples.
+  - type: input
+    id: milestone
+    attributes:
+      label: Milestone or component
+      placeholder: "crates/detect, apps/desktop, M1.5 …"
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What should happen
+      description: Cite the document and section that specifies it, if there is one.
+      placeholder: "docs/06-COMPLIANCE.md §3 says …"
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happens instead
+      description: Exact command and exact output.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      options:
+        - "P0 — compliance, data loss, or the rail does not render"
+        - "P1 — a documented behaviour is wrong"
+        - "P2 — degraded but usable"
+        - "P3 — cosmetic or cleanup"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: "Windows 11 23H2 / macOS 15.5 / ubuntu-latest CI"

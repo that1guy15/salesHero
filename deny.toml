@@ -1,0 +1,71 @@
+# Supply-chain policy. `cargo deny check`, enforced in CI.
+#
+# This repository is public, MIT, ships a signed Windows installer, and pulls a
+# heavy graph — ort, fastembed, tauri, bundled SQLite. An unreviewed licence or
+# a known advisory reaching an insurance agency's desktop is not recoverable by
+# a patch release.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+
+# Security vulnerabilities always fail the build — that is not configurable
+# here and must never be relaxed.
+#
+# `unmaintained` is scoped to crates this workspace depends on *directly*, the
+# ones we can actually act on. Scoped to "all" the gate reports 16 findings,
+# every one of them transitive and none a vulnerability: ten are Tauri's GTK3
+# Linux backend (which the product does not ship — it targets Windows — and for
+# which no upgrade exists), five are `unic-*`, one is `proc-macro-error` behind
+# a proc macro. A gate that fires 16 times on things nobody can fix is a gate
+# people learn to ignore, and the next real advisory arrives into that habit.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+# Permissive only. A copyleft dependency in a shipped desktop binary is a
+# licensing decision, not a dependency bump, and must be made deliberately.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "BSL-1.0",
+    "OpenSSL",
+    # Community Data License Agreement, permissive variant. Carried by
+    # webpki-roots, which packages Mozilla's CA bundle as data rather than code.
+    "CDLA-Permissive-2.0",
+    # University of Illinois/NCSA Open Source License — a BSD/MIT-style
+    # permissive licence, dual-listed by parts of the LLVM-derived toolchain the
+    # ONNX runtime bindings pull in.
+    "NCSA",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace-internal crates are path dependencies without a version, which is
+# correct for a workspace and is not the unpinned-third-party risk this rule
+# exists to catch.
+allow-wildcard-paths = true
+# Settled in docs/02-ARCHITECTURE.md §4 and AGENTS.md: cpal cannot do WASAPI
+# loopback reliably and cannot do per-process capture at all. If it appears in
+# the graph, someone is reopening a closed decision.
+deny = [{ crate = "cpal", reason = "use the wasapi crate — docs/02-ARCHITECTURE.md §4" }]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,39 @@
+name: Compliance concern
+description: Something may coach an agent toward a TCPA or recording-law violation
+labels: ["compliance", "P0"]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **If this involves a real prospect, a real removal request, or real call
+        content, do not open a public issue.** Use a private security advisory.
+
+
+        Use this template for behaviour that is wrong in principle — a rebuttal
+        served for a removal request, a comply card reaching a model, a
+        disclosure claim the product cannot support.
+  - type: textarea
+    id: behaviour
+    attributes:
+      label: What the product does
+      description: Use a synthetic utterance. Include the card that was served.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: requirement
+    attributes:
+      label: Which requirement this violates
+      placeholder: "docs/06-COMPLIANCE.md §3 — a comply objection must never receive a rebuttal"
+    validations:
+      required: true
+  - type: checkboxes
+    id: layers
+    attributes:
+      label: Which of the five enforcement layers failed
+      options:
+        - label: "1. Type level — `RebuttableObjection`"
+        - label: "2. Data level — the SQL trigger on `allow_refine`"
+        - label: "3. Import override"
+        - label: "4. Required test `comply_objections_never_reach_llm`"
+        - label: "5. Gate selection — `select_hit` / `comply_containment`"

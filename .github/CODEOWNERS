@@ -1,0 +1,22 @@
+# Ownership. In solo-maintainer mode this identifies accountability; it is not a
+# required self-approval gate, because self-approval is impossible. Re-enable
+# required CODEOWNER review the day a second maintainer is appointed.
+* @that1guy15
+
+# Compliance-critical. `docs/06-COMPLIANCE.md` §3 contains two requirements that
+# are legal rather than product decisions. A change under these paths gets a
+# compliance review whether or not the diff looks routine.
+/crates/detect/src/gate.rs        @that1guy15
+/crates/core/src/lib.rs           @that1guy15
+/crates/store/migrations/         @that1guy15
+/playbooks/                       @that1guy15
+/docs/06-COMPLIANCE.md            @that1guy15
+/evals/fixtures/                  @that1guy15
+
+# Process, supply chain, and release surfaces.
+/.github/                         @that1guy15
+/AGENTS.md                        @that1guy15
+/CLAUDE.md                        @that1guy15
+/.claude/                         @that1guy15
+/docs/DECISIONS.md                @that1guy15
+/deny.toml                        @that1guy15

@@ -4,6 +4,51 @@ This file is read by Codex and Claude Code. Symlink `CLAUDE.md` → `AGENTS.md`.
 
 ---
 
+## Authority
+
+Read and obey, in order. A lower item never overrides a higher one.
+
+1. `docs/06-COMPLIANCE.md` — legal obligations. Outranks product preference.
+2. `docs/01-PRD.md` — what ships. §3 is the scope fence, §9 is where additions wait.
+3. `docs/02-ARCHITECTURE.md` — the shape everything follows from.
+4. `docs/DECISIONS.md` — on any question of *what we chose*, this outranks the specs.
+5. `docs/PROJECT-STATUS.md` — on any question of *what exists*, this outranks the specs.
+6. This file — engineering workflow and safety boundary.
+7. `.claude/skills/` — task procedure. A skill never overrides a document.
+
+`GOVERNANCE.md` says who decides. `CONTRIBUTING.md` is the workflow in full.
+
+---
+
+## Delivery is not optional
+
+**Work is not done when the code works. It is done when it is merged through a
+pull request that passed `required-ci`.**
+
+Pushing a branch and stopping is an unfinished task, not a handoff. So is
+leaving a green branch un-PR'd because nobody asked for a PR. If you wrote code,
+you open the pull request.
+
+```text
+branch  ->  build with tests  ->  make gate  ->  invariant-audit
+  ->  compliance-review (if the diff touches detect/store/llm/playbook/cards)
+  ->  record deviations in docs/DECISIONS.md  ->  git commit -s
+  ->  push  ->  gh pr create  ->  required-ci green  ->  merge
+  ->  update docs/PROJECT-STATUS.md  ->  delete the branch
+```
+
+Non-negotiables:
+
+- **Never push to `main`.** Branch protection blocks it; do not ask for it to be
+  lifted. One milestone per branch.
+- **`git commit -s`.** Every commit needs a DCO sign-off or CI rejects the PR.
+- **`make gate` before every push.** It runs exactly what CI runs.
+- **No P0 or P1 merges** — not with a follow-up issue, not with a TODO.
+- **Paste real output** into the PR's runnable-output section. Not "tests pass".
+- The `ship` skill has the full procedure. Use it rather than improvising.
+
+---
+
 ## Read this first
 
 Before writing any code, read `docs/01-PRD.md` and `docs/02-ARCHITECTURE.md` in full. Then read the specific document for the milestone you are on, per `docs/07-BUILD-PLAN.md`.
@@ -46,6 +91,7 @@ over improvising:
 | `playbook-lint` | Authoring or reviewing playbook content |
 | `insurance-domain` | What the end customer's job actually is |
 | `windows-verify` | The manual M1.7/M4/M6/M9 checklists on the Windows box |
+| `ship` | Branch, commit, PR, checks, merge — the delivery discipline above |
 
 Subagents in `.claude/agents/`: `spec-auditor` (code-vs-docs drift) and
 `rust-reviewer` (realtime safety, compliance path, latency budget).
@@ -85,9 +131,15 @@ The four named invariant tests above are required and must be present by the mil
 
 ## Commit conventions
 
-Conventional commits, scoped to crate: `feat(detect): promote rail item on gate hit`.
+Conventional commits, scoped to crate, DCO-signed:
 
-One milestone per branch. Do not merge a milestone whose "runnable output" criterion is unmet.
+```bash
+git commit -s -m "feat(detect): promote rail item on gate hit"
+```
+
+One milestone per branch. Do not merge a milestone whose "runnable output"
+criterion is unmet. See `CONTRIBUTING.md` for the pre-PR checklist and
+`.claude/skills/ship/` for the procedure.
 
 ---
 

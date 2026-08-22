@@ -1,0 +1,7 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security or privacy report
+    url: https://github.com/that1guy15/salesHero/security/advisories/new
+    about: >-
+      Never open a public issue for a vulnerability, a leaked value, or anything
+      containing real call content. Use a private advisory. See SECURITY.md.

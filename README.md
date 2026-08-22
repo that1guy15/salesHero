@@ -59,6 +59,9 @@ Read in order. Each assumes the prior ones.
 | 7 | [`docs/07-BUILD-PLAN.md`](docs/07-BUILD-PLAN.md) | Milestones as verifiable tasks |
 | — | [`docs/WINDOWS-TESTING.md`](docs/WINDOWS-TESTING.md) | Setting up and testing the overlay on Windows |
 | — | [`docs/DEV-SETUP.md`](docs/DEV-SETUP.md) | What a development machine needs, and why |
+| — | [`CONTRIBUTING.md`](CONTRIBUTING.md) | The engineering workflow. Nothing reaches `main` except through a PR. |
+| — | [`GOVERNANCE.md`](GOVERNANCE.md) | Who decides, and the order the documents bind in |
+| — | [`SECURITY.md`](SECURITY.md) | Reporting privately. Never open a public issue with call content. |
 | — | [`docs/PROJECT-STATUS.md`](docs/PROJECT-STATUS.md) | **Start here.** What is built, what is not, open concerns |
 | — | [`docs/DECISIONS.md`](docs/DECISIONS.md) | Where the implementation deviates from the specs, and why |
 
@@ -90,8 +93,8 @@ Rust workspace, Tauri v2 shell, everything on-device by default.
 Nothing below needs audio hardware, a network connection, an API key, or a model download.
 
 ```bash
-cargo build --workspace
-cargo test --workspace
+make gate        # everything CI enforces: fmt, clippy, tests, detection gate
+make doctor      # what this machine is missing
 ```
 
 ```bash
