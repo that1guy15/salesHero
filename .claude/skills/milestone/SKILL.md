@@ -70,9 +70,12 @@ Do all of these, in order:
    playbook format, or card rendering.
 5. Update `docs/PROJECT-STATUS.md`: what is built, what is not, what you found.
    Write it for whoever picks this up next, not as a changelog.
-6. Commit as `feat(<crate>): <what>` — conventional, scoped to crate.
+6. **Invoke the `ship` skill** — commit signed, open the pull request, drive
+   `required-ci` green, merge, delete the branch.
 
-One milestone per branch.
+**A milestone is not closed until it is merged.** A green branch sitting unmerged
+is an unfinished milestone, however complete the code looks. One milestone per
+branch.
 
 ## Where the milestones actually stand
 

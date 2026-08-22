@@ -63,14 +63,34 @@ This repo is public, MIT, and pulls a large dependency tree. `PROJECT-STATUS.md`
 
 ---
 
-## The inner loop
+### `gitleaks` — secret scanning
 
 ```bash
-cargo check --workspace        # what to run while working
-cargo test --workspace
-cargo clippy --workspace --all-targets
-cargo fmt --all                # before every commit — see below
+brew install gitleaks          # or: https://github.com/gitleaks/gitleaks/releases
+make secret-scan
 ```
+
+CI enforces this over full history. Running it locally means finding a mistake
+before it is in a commit that has to be rewritten.
+
+---
+
+## The inner loop
+
+`make` is the canonical surface. CI runs these same targets, so "it passed
+locally" and "it passed in CI" mean the same thing.
+
+```bash
+make doctor       # what this machine is missing
+make gate         # fmt, clippy on both feature sets, tests, detection gate
+make audit        # advisories, licences, banned crates, sources
+make secret-scan
+make calibrate EMBEDDER=hybrid   # the M1.5 report
+make overlay      # run the app
+```
+
+While working, `cargo check --workspace` is the fast loop. `make gate` before
+every push.
 
 **`cargo fmt --all` before every commit.** CI's first step is
 `cargo fmt --all -- --check` with `RUSTFLAGS: -D warnings`, and a formatting
