@@ -23,5 +23,5 @@ default = []
 onnx = ["dep:fastembed"]
 
 [dependencies.fastembed]
-version = "4"
+version = "6"
 optional = true
